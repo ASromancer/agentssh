@@ -520,6 +520,12 @@ func (s *Service) Decide(a *DecideArgs, _ *Empty) error {
 	default:
 		return fmt.Errorf("unknown choice %q", a.Choice)
 	}
+	if a.Choice == "s" {
+		// A destructive command is never re-runnable without a fresh approval.
+		if req, ok := d.q.Get(a.ID); ok && req.Level == policy.Destructive.String() {
+			return errors.New("destructive commands cannot be approved for 30 minutes; approve once")
+		}
+	}
 	switch {
 	case a.Choice == "n": // denying needs no proof
 		_, err := d.q.Resolve(a.ID, a.Choice, a.Note, "none")

@@ -226,8 +226,8 @@ function copyText(text, btn) {
 function copyBtn(text, label) {
   const b = el("button", "copybtn");
   b.type = "button";
-  b.setAttribute("aria-label", label || "Copy");
-  b.title = label || "Copy";
+  b.setAttribute("aria-label", label || "Sao chép");
+  b.title = label || "Sao chép";
   b.appendChild(icon("copy"));
   b.addEventListener("click", (e) => { e.stopPropagation(); copyText(typeof text === "function" ? text() : text, b); });
   return b;
@@ -329,6 +329,7 @@ function askForm(o) {
     form.noValidate = true;
     form.id = "form-" + Date.now();
     if (o.desc) form.appendChild(el("p", null, o.desc));
+    (o.nodes || []).forEach((n) => form.appendChild(n));
     if (o.info) form.appendChild(el("div", "infobox", o.info));
     const built = (o.fields || []).map((d) => {
       const inp = el("input", "input" + (d.mono ? " mono" : ""));
@@ -435,7 +436,7 @@ async function loadStatus() {
   noreqWarn();
   const n = status.Pending ? String(status.Pending) : "";
   $("pendingcount").textContent = n;
-  document.title = (n ? "(" + n + ") " : "") + "ostiary";
+  document.title = (n ? "(" + n + ") " : "") + "Ostiary";
   $("configwarn").classList.toggle("hidden", !status.UserOnly);
 }
 async function toggleVault() {
@@ -531,7 +532,7 @@ function relTime(iso) {
   if (s < 60) return s + " giây trước";
   if (s < 3600) return Math.floor(s / 60) + " phút trước";
   if (s < 86400) return Math.floor(s / 3600) + " giờ trước";
-  return new Date(iso).toLocaleString();
+  return fmtTime(iso);
 }
 const hasTime = (iso) => iso && new Date(iso).getFullYear() > 2000;
 
@@ -572,7 +573,7 @@ function buildCard(r) {
 
   const cmdbox = el("div", "cmdbox");
   cmdbox.appendChild(r.kind === "run" || r.kind === "job" ? highlighted(r.cmd, r.reasons) : el("pre", "cmd", r.cmd));
-  cmdbox.appendChild(copyBtn(r.cmd, "Copy lệnh"));
+  cmdbox.appendChild(copyBtn(r.cmd, "Sao chép lệnh"));
   body.appendChild(cmdbox);
 
   const why = (r.reasons || []).filter((x) => x.level !== "read");
@@ -628,7 +629,7 @@ function buildCard(r) {
     b.classList.add("loading");
     try {
       await call("POST", "/api/decide", { id: r.id, choice, note: choice === "m" ? note.value : "", code: codeIn ? codeIn.value : "" });
-      ok("#" + r.id + ": " + ({ y: "đã duyệt", s: "đã duyệt 30 phút", n: "đã từ chối", m: "đã từ chối kèm lời nhắn" })[choice]);
+      ok("#" + r.id + ": " + ({ y: "đã duyệt", s: "đã cho phép lệnh này 30 phút", n: "đã từ chối", m: "đã từ chối kèm lời nhắn" })[choice]);
       refresh();
     } catch (e) {
       fail(e);
@@ -644,12 +645,19 @@ function buildCard(r) {
     buttons.push(b);
     return b;
   };
-  actions.append(mk("Duyệt 1 lần", "primary lg", "y", "check"), mk("Duyệt 30 phút", "lg", "s"));
+  actions.append(mk("Duyệt 1 lần", "primary lg", "y", "check"));
+  // The daemon's "s" covers only this exact command on this host for 30 minutes; it refuses it for destructive.
+  const sticky = r.level === "destructive" || r.level === "forbidden" ? null : mk("Cho phép lệnh này 30 phút", "", "s");
+  if (sticky) {
+    sticky.title = "Chỉ đúng lệnh này, trên host này, trong 30 phút. Lệnh khác vẫn phải duyệt.";
+    actions.appendChild(sticky);
+  }
   actions.appendChild(el("span", "sp"));
   const toggle = button("Từ chối kèm lời nhắn", "ghost");
   toggle.addEventListener("click", () => { noteRow.classList.toggle("hidden"); if (!noteRow.classList.contains("hidden")) note.focus(); });
   actions.append(toggle, mk("Từ chối", "danger lg", "n", "x"));
   body.appendChild(actions);
+  if (sticky) body.appendChild(el("p", "stickyhint", "\u201C30 phút\u201D chỉ áp dụng cho đúng lệnh này trên host này; lệnh khác vẫn phải duyệt."));
   noteRow.append(note, mk("Gửi lời từ chối", "danger", "m"));
   body.appendChild(noteRow);
   const gone = el("div", "expiredmsg hidden", "Yêu cầu đã hết hạn hoặc đã được xử lý");
@@ -709,14 +717,44 @@ async function loadPending() {
   tickCards();
 }
 
+// reload approves whatever is on disk now, so say what that is before asking.
+function confirmReload() {
+  const changed = status && status.UserOnly;
+  return confirmBox("Đọc lại cấu hình?",
+    (changed ? "hosts.toml và/hoặc rules.toml đã thay đổi trên đĩa kể từ lần duyệt trước. " : "") +
+    "Đọc lại sẽ duyệt mọi thay đổi trong hai file đó (host mới, allow/deny, quy tắc). " +
+    "Hãy mở và xem trước khi duyệt, nhất là nếu bạn không tự sửa.",
+    { info: "~/.config/ostiary/hosts.toml\n~/.config/ostiary/rules.toml\n(Windows: %AppData%\\ostiary)", ok: changed ? "Tôi đã kiểm tra, đọc lại" : "Đọc lại", danger: !!changed });
+}
+// trust: compare the key the server presents now with what known_hosts pins.
+async function confirmTrust(name, info) {
+  const fpNew = (info.match(/SHA256:\S+/) || [""])[0];
+  let old = [];
+  try { old = (await call("GET", "/api/knownhosts")).filter((k) => k.name === name).map((k) => k.fingerprint); } catch (e) { /* no known_hosts: treat as first trust */ }
+  const changed = old.length > 0 && fpNew && !old.includes(fpNew);
+  if (!changed) {
+    return confirmBox("Xác nhận host key", old.length ? "Host key không đổi so với known_hosts." : "Lần đầu tin host key này. So sánh fingerprint với giá trị bạn mong đợi.", { info, ok: "Tiếp tục" });
+  }
+  const box = el("div", "hkchange");
+  box.setAttribute("role", "alert");
+  const fp = (lab, v) => { const d = el("div", "hkfp"); d.append(el("span", null, lab), document.createTextNode(v)); return d; };
+  box.append(el("b", null, "Host key ĐÃ THAY ĐỔI"),
+    el("div", null, "Máy chủ đang gửi host key khác với host key đã lưu. Có thể server vừa được cài lại, nhưng cũng có thể ai đó đang chen vào giữa (MITM)."),
+    fp("Đang tin (known_hosts):", old.join("\n")), fp("Máy chủ đang gửi:", fpNew),
+    el("div", null, "Chỉ tiếp tục nếu bạn biết lý do. Hãy xác minh fingerprint qua kênh khác (hỏi quản trị viên, xem trên console của server)."));
+  return confirmBox("Host key ĐÃ THAY ĐỔI", "Tin host key mới sẽ thay thế host key đang lưu cho " + info.split(" host key:")[0] + ".", { nodes: [box], ok: "Tin host key mới", danger: true });
+}
+
 // ---- admin helper: begin -> (info confirm) -> (OS dialog or code) -> commit ----
 async function admin(op, name, extra) {
   if (VAULT_OPS.has(op) && !(await needVault())) return null;
+  if (op === "reload" && !(await confirmReload())) return null;
   const b = await call("POST", "/api/admin/begin", { op, name });
   let code = "";
-  if (b.Info) {
-    const t = op === "trust" ? "Xác nhận host key" : "Xác nhận thao tác";
-    if (!(await confirmBox(t, "So sánh với fingerprint bạn mong đợi trước khi tiếp tục.", { info: b.Info, ok: "Tiếp tục" }))) return null;
+  if (op === "trust" && b.Info) {
+    if (!(await confirmTrust(name, b.Info))) return null;
+  } else if (b.Info) {
+    if (!(await confirmBox("Xác nhận thao tác", "Kiểm tra thông tin trước khi tiếp tục.", { info: b.Info, ok: "Tiếp tục" }))) return null;
   }
   let wait = null;
   if (!b.OSAuth) {
@@ -789,7 +827,7 @@ function hostCard(name, h) {
   av.style.setProperty("--h", String(hashHue(name)));
   const main = el("div", "main");
   main.append(el("div", "name", name), el("div", "sub", addrOf(h)));
-  main.title = h.description || "";
+  main.title = addrOf(h) + (h.description ? "\n" + h.description : "");
   main.tabIndex = 0;
   main.setAttribute("role", "button");
   main.setAttribute("aria-label", "Sửa host " + name);
@@ -803,8 +841,8 @@ function hostCard(name, h) {
     e.stopPropagation();
     menu(kb, [
       ["Sửa", "pencil", () => openHostDrawer(name, h).catch(fail)],
-      ["Trust host key", "shieldcheck", () => trustHost(name)],
-      ["Copy user@host", "copy", () => copyText((h.user ? h.user + "@" : "") + h.host)],
+      ["Tin host key", "shieldcheck", () => trustHost(name)],
+      ["Sao chép user@host", "copy", () => copyText((h.user ? h.user + "@" : "") + h.host)],
       null,
       ["Xóa", "trash", () => removeHost(name), true],
     ]);
@@ -824,7 +862,7 @@ function hostCard(name, h) {
     const hk = el("button", "pill warn pillbtn");
     hk.type = "button";
     hk.title = "Bấm để kiểm tra fingerprint và tin host key";
-    hk.append(icon("shieldcheck", 12), document.createTextNode("host key chưa tin · Trust"));
+    hk.append(icon("shieldcheck", 12), document.createTextNode("host key chưa tin · Tin"));
     hk.addEventListener("click", (e) => { e.stopPropagation(); trustHost(name).catch(fail); });
     tags.appendChild(hk);
   }
@@ -930,7 +968,7 @@ async function openHostDrawer(name, h) {
   const fName = field("Tên", iName, name ? "Tên không đổi được sau khi tạo." : "Agent gọi host bằng tên này.");
   const fHost = field("Địa chỉ", iHost);
   const fPort = field("Port", iPort);
-  const fUser = field("User", iUser);
+  const fUser = field("Người dùng SSH", iUser);
   const row = el("div", "two");
   row.append(fHost, fPort);
   const fKey = field("Key trong vault", sel, "Chọn key hoặc mật khẩu đã lưu ở Kho khóa.");
@@ -938,7 +976,7 @@ async function openHostDrawer(name, h) {
 
   const prof = el("div", "seg");
   prof.setAttribute("role", "radiogroup");
-  prof.setAttribute("aria-label", "Profile");
+  prof.setAttribute("aria-label", "Mức quyền");
   const cur = (h && h.profile) || "standard";
   ["readonly", "standard", "full"].forEach((p) => {
     const l = el("label");
@@ -948,7 +986,7 @@ async function openHostDrawer(name, h) {
     prof.appendChild(l);
   });
   const fProf = el("div", "field");
-  fProf.append(el("div", "lab", "Profile"), prof, el("div", "hint", "readonly chỉ đọc; standard cho lệnh thông thường; full gần như không giới hạn (vẫn qua duyệt)."));
+  fProf.append(el("div", "lab", "Mức quyền"), prof, el("div", "hint", "readonly chỉ đọc; standard cho lệnh thông thường; full gần như không giới hạn (vẫn qua duyệt)."));
 
   const sw = el("label", "switch");
   const cb = el("input");
@@ -1097,7 +1135,7 @@ function keyItem(k, isPw) {
     if (fp) {
       const f = el("span", "fp", shortFp(fp));
       f.title = fp;
-      f.appendChild(copyBtn(fp, "Copy fingerprint"));
+      f.appendChild(copyBtn(fp, "Sao chép fingerprint"));
       tags.appendChild(f);
     }
   }
@@ -1121,12 +1159,12 @@ async function showPublicKey(name, pub) {
   const l = openLayer("modal", "Đã tạo key " + name);
   l.body.appendChild(el("p", null, "Thêm public key này vào ~/.ssh/authorized_keys của user trên server, rồi gán key cho host."));
   const box = el("div", "cmdbox");
-  box.append(el("pre", "keycode", pub), copyBtn(pub, "Copy public key"));
+  box.append(el("pre", "keycode", pub), copyBtn(pub, "Sao chép public key"));
   box.firstChild.style.paddingRight = "44px";
   l.body.appendChild(box);
   const done = button("Xong", "primary");
   done.addEventListener("click", l.close);
-  const cp = button("Copy public key", "", "copy");
+  const cp = button("Sao chép public key", "", "copy");
   cp.addEventListener("click", () => copyText(pub));
   l.foot.append(cp, done);
   done.focus();
@@ -1151,7 +1189,7 @@ async function importKey() {
   try {
     if (!(await needVault())) return;
     const v = await askForm({
-      title: "Import key", desc: "Chọn file private key (OpenSSH hoặc PEM). Key được chuẩn hóa rồi lưu vào vault.", ok: "Import",
+      title: "Nhập key", desc: "Chọn file private key (OpenSSH hoặc PEM). Key được chuẩn hóa rồi lưu vào vault.", ok: "Import",
       fields: [
         { name: "name", label: "Tên key", required: true },
         { name: "file", label: "File private key", type: "file", required: true, errmsg: "Chọn một file" },
@@ -1190,13 +1228,13 @@ function renderKnownHosts() {
   const rows = khData.filter((k) => !q || (k.host + " " + k.fingerprint + " " + (k.name || "")).toLowerCase().includes(q));
   if (!rows.length) {
     const e = el("div", "empty");
-    e.append(icon("fingerprint", 40), el("h3", null, khData.length ? "Không có mục khớp" : "known_hosts đang trống"), el("p", null, "Host key được ghi lại khi bạn Trust một host ở màn hình Host."));
+    e.append(icon("fingerprint", 40), el("h3", null, khData.length ? "Không có mục khớp" : "known_hosts đang trống"), el("p", null, "Host key được ghi lại khi bạn tin một host (màn hình Host hoặc CLI)."));
     box.appendChild(e);
     return;
   }
   const card = el("div", "card");
   const wrap = el("div", "tablewrap");
-  const t = el("table");
+  const t = el("table", "cards stack");
   const hr = el("tr");
   ["Host", "Loại", "Fingerprint", "Host ostiary", ""].forEach((h) => hr.appendChild(el("th", null, h)));
   t.appendChild(el("thead")).appendChild(hr);
@@ -1207,18 +1245,19 @@ function renderKnownHosts() {
     const ty = el("td"); ty.appendChild(el("span", "pill accent", k.type.replace(/^ssh-/, ""))); tr.appendChild(ty);
     const fp = el("td", "mono nowrap", shortFp(k.fingerprint));
     fp.title = k.fingerprint;
-    fp.appendChild(copyBtn(k.fingerprint, "Copy fingerprint"));
+    fp.appendChild(copyBtn(k.fingerprint, "Sao chép fingerprint"));
     tr.appendChild(fp);
     const nm = el("td");
     if (k.name) nm.appendChild(el("span", "pill ok", k.name)); else nm.appendChild(el("span", "muted", "-"));
     tr.appendChild(nm);
     const act = el("td");
     if (k.name) {
-      const b = button("Trust lại", "", "shieldcheck");
+      const b = button("Tin lại host key", "", "shieldcheck");
       b.addEventListener("click", () => busy(b, async () => { const o = await admin("trust", k.name); if (o) { ok(o); loadKnownHosts().catch(fail); } }));
       act.appendChild(b);
     }
     tr.appendChild(act);
+    Array.from(tr.children).forEach((c, i) => { c.dataset.label = ["Host", "Loại", "Fingerprint", "Host ostiary", ""][i]; });
     tb.appendChild(tr);
   });
   t.appendChild(tb);
@@ -1234,16 +1273,40 @@ async function loadChecks() {
   box.replaceChildren();
   checks.forEach((c) => {
     const d = el("div", "card hcard " + (c.ok ? "ok" : "warn"));
-    d.append(icon(c.ok ? "check" : "alert"), el("span", null, c.text));
+    d.append(icon(c.ok ? "check" : "alert"), el("span", null, checkVi(c.text)));
     box.appendChild(d);
   });
 }
 $("rehealth").addEventListener("click", (e) => busy(e.currentTarget, loadChecks));
 
+const DECISION_VI = { allow: "tự cho phép", approved: "đã duyệt", denied: "từ chối", forbidden: "cấm", blocked: "chặn", timeout: "hết hạn", error: "lỗi", ask: "hỏi" };
+const fmtTime = (iso) => new Date(iso).toLocaleString("vi-VN");
+// doctorChecks (internal/cli/human.go) texts; [regexp, replacement]. Unknown text stays as is.
+const CHECK_VI = [
+  [/^daemon is running$/, "Daemon đang chạy"],
+  [/^daemon is not running.*/, "Daemon chưa chạy"],
+  [/^daemon status: (.*)$/, "Không đọc được trạng thái daemon: $1"],
+  [/^no vault; run 'ostiary init'$/, "Chưa có vault: tạo ở màn hình Hướng dẫn"],
+  [/^vault is locked; run 'ostiary unlock'$/, "Vault đang khóa: mở khóa bằng chip vault ở góc trên"],
+  [/^vault is unlocked$/, "Vault đã mở khóa"],
+  [/^config changed on disk;.*/, "Cấu hình trên đĩa đã đổi: agent bị từ chối cho đến khi bạn đọc lại ở màn hình Host"],
+  [/^approvals use OS authentication$/, "Duyệt bằng xác thực của hệ điều hành"],
+  [/^approvals use codes from desktop notifications \((.*)\)$/, "Duyệt bằng mã trong thông báo trên máy ($1)"],
+  [/^UI on (.*)$/, "Giao diện web chạy tại $1"],
+  [/^UI is not running.*/, "Giao diện web chưa chạy"],
+  [/^(\w+): ostiary hook installed$/, "$1: hook của Ostiary đã cài"],
+  [/^(\w+): ostiary hook not installed; direct ssh is not blocked.*/, "$1: hook của Ostiary chưa cài, nên agent vẫn có thể chạy ssh trực tiếp (cài ở màn hình Hướng dẫn)"],
+  [/^desktop notification sent.*/, "Đã gửi thông báo thử: hãy kiểm tra bạn có thấy nó"],
+  [/^desktop notifications do not work \((.*?)\):.*/, "Thông báo trên máy không hoạt động ($1): mã duyệt sẽ hiện trong terminal, nên nên dùng chế độ xác thực hệ điều hành"],
+  [/^the ostiary service starts before your desktop session.*/, "Dịch vụ Ostiary khởi động trước phiên desktop (unit cũ): cập nhật ở màn hình Hướng dẫn"],
+  [/^(.*) has no passphrase: agents running as you can read it$/, "$1 không có passphrase: agent chạy cùng tài khoản của bạn có thể đọc được"],
+];
+const checkVi = (t) => { for (const [re, to] of CHECK_VI) if (re.test(t)) return t.replace(re, to); return t; };
 function decisionPill(d) {
   const cls = { allow: "ok", approved: "ok", denied: "bad", blocked: "bad", error: "bad", forbidden: "forbidden", timeout: "warn", ask: "accent" }[d] || "neutral";
-  return el("span", "pill " + cls, d);
+  return el("span", "pill " + cls, DECISION_VI[d] || d);
 }
+const AUDIT_COLS = ["Thời gian", "#", "Project", "Agent", "Host", "Mức", "Quyết định", "Exit", "Lệnh"];
 async function loadAudit() {
   const q = new URLSearchParams({ host: $("fhost").value.trim(), project: $("fproject").value.trim(), decision: $("fdecision").value, since: $("fsince").value, limit: PAGE, offset: auditOffset });
   const r = await call("GET", "/api/audit?" + q);
@@ -1252,7 +1315,7 @@ async function loadAudit() {
   r.entries.forEach((e) => {
     const tr = el("tr", e.id ? "click" : "");
     const td = (cls, ...kids) => { const t = el("td", cls); kids.forEach((k) => t.append(k)); tr.appendChild(t); return t; };
-    td("nowrap", new Date(e.time).toLocaleString());
+    td("nowrap", fmtTime(e.time));
     td("nowrap", e.id ? "#" + e.id : "");
     const proj = e.repo || e.cwd || "";
     td("nowrap", proj.split(/[\\/]/).filter(Boolean).pop() || proj).title = proj + (e.repo && e.cwd && e.cwd !== e.repo ? "\ncwd: " + e.cwd : "");
@@ -1269,8 +1332,9 @@ async function loadAudit() {
       tr.setAttribute("role", "button");
       tr.setAttribute("aria-label", "Xem output #" + e.id);
       tr.addEventListener("click", () => showOutput(e.id).catch(fail));
-      tr.addEventListener("keydown", (ev) => { if (ev.key === "Enter") showOutput(e.id).catch(fail); });
+      tr.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); showOutput(e.id).catch(fail); } });
     }
+    Array.from(tr.children).forEach((t, i) => { t.dataset.label = AUDIT_COLS[i]; });
     rows.appendChild(tr);
   });
   if (!r.entries.length) {
@@ -1296,16 +1360,20 @@ async function showOutput(id) {
   const go = button("Lọc", "primary");
   bar.append(sb, go);
   const pre = el("pre", "outpre", "Đang tải…");
-  l.body.append(bar, pre);
+  const errLine = el("div", "err");
+  errLine.setAttribute("role", "alert");
+  l.body.append(bar, errLine, pre);
   let text = "";
   const load = async () => {
-    const r = await call("GET", "/api/out/" + id + "?grep=" + encodeURIComponent(grep.value)).catch((e) => ({ text: e.message }));
-    text = r.text || "";
-    pre.textContent = text || "(trống)";
+    let r;
+    try { r = await call("GET", "/api/out/" + id + "?grep=" + encodeURIComponent(grep.value)); } catch (e) { r = null; errLine.textContent = friendlyError(e.message); }
+    if (r) errLine.textContent = "";
+    text = r ? r.text || "" : ""; // an error is never copyable as output
+    pre.textContent = r ? text || "Lệnh không in gì" : "";
   };
   go.addEventListener("click", () => busy(go, load));
   grep.addEventListener("keydown", (e) => { if (e.key === "Enter") go.click(); });
-  const cp = button("Copy", "", "copy");
+  const cp = button("Sao chép", "", "copy");
   cp.addEventListener("click", () => copyText(text));
   const close = button("Đóng", "primary");
   close.addEventListener("click", l.close);
@@ -1374,7 +1442,7 @@ async function setupAct(b, fn) { // run an action button, then re-render
 function stepCard(n, o) {
   const c = el("li", "step" + (o.done ? " done" : "") + (o.current ? " current" : "") + (o.optional ? " optional" : ""));
   const ic = el("span", "stepic");
-  if (o.done) ic.appendChild(icon("check")); else ic.textContent = String(n);
+  if (o.done) ic.appendChild(icon("check")); else ic.textContent = o.optional ? "+" : String(n);
   const body = el("div", "stepbody");
   const head = el("div", "stephead");
   head.appendChild(el("h2", null, o.title));
@@ -1454,7 +1522,7 @@ async function loadSetup() {
       ed.addEventListener("click", () => busy(ed, () => openHostDrawer(n, h)));
       row.appendChild(ed);
       if (!hostData.Trusted[n]) {
-        const t = button("Trust", "primary");
+        const t = button("Tin host key", "primary");
         t.addEventListener("click", () => setupAct(t, async () => { const o = await admin("trust", n); if (o) ok(o); }));
         row.appendChild(t);
       }
@@ -1464,7 +1532,7 @@ async function loadSetup() {
   out.push(stepCard(2, { title: "Thêm host", desc: "Máy chủ mà agent sẽ SSH tới. Cần ít nhất một host đã bật 'agent', có key hoặc mật khẩu và đã Trust host key.", done: okHosts, controls: c2, extra: ex2, hint: r.Hosts <= 0 && off ? "Cần tạo và mở khóa vault ở bước 1 trước." : "" }));
 
   // 3 key
-  const c3 = [["Tạo key", genKey, "plus"], ["Import key", importKey, "upload"], ["Lưu mật khẩu", savePassword, "lock"]].map(([t, f, i]) => {
+  const c3 = [["Tạo key", genKey, "plus"], ["Nhập key", importKey, "upload"], ["Lưu mật khẩu", savePassword, "lock"]].map(([t, f, i]) => {
     const b = button(t, r.Keys > 0 ? "" : "primary", i);
     b.disabled = off;
     b.addEventListener("click", () => setupAct(b, f));
@@ -1513,7 +1581,7 @@ async function loadSetup() {
   if (r.PolkitMissing) {
     const cmd = "sudo \"$(command -v ostiary)\" install-polkit";
     const cb2 = el("div", "cmdbox");
-    cb2.append(el("pre", "cmd", cmd), copyBtn(cmd, "Copy lệnh"));
+    cb2.append(el("pre", "cmd", cmd), copyBtn(cmd, "Sao chép lệnh"));
     const ex = el("div");
     ex.append(cb2, el("p", "muted", "rồi khởi động lại Ostiary."));
     out.push(stepCard(6, { title: "Duyệt bằng mật khẩu máy", desc: "Để duyệt bằng hộp thoại mật khẩu của hệ điều hành thay vì mã, chạy một lần trong terminal:", optional: true, extra: ex }));

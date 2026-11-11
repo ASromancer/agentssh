@@ -306,7 +306,7 @@ func TestDaemonEndToEnd(t *testing.T) {
 	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Code: "XXXX", Choice: "y"}, &Empty{}); err == nil {
 		t.Fatal("bad code accepted")
 	}
-	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Code: h.lastCode(), Choice: "s"}, &Empty{}); err != nil {
+	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Code: h.lastCode(), Choice: "y"}, &Empty{}); err != nil {
 		t.Fatal(err)
 	}
 	rm.ApprovalID = r.Pending
@@ -316,11 +316,24 @@ func TestDaemonEndToEnd(t *testing.T) {
 	if _, err := os.Stat(victim); !os.IsNotExist(err) {
 		t.Fatal("rm did not run")
 	}
-	// Sticky approval covers the identical command only.
-	if r := h.exec(ExecArgs{Cmd: "rm " + victim}); r.Pending != 0 || r.Exit == 0 {
+	// Sticky approval (mutate only) covers the identical command only.
+	tch := ExecArgs{Env: Env{Agent: "codex"}, Cmd: "touch " + victim}
+	r = h.exec(tch)
+	if r.Pending == 0 || r.Level != "mutate" {
+		t.Fatalf("expected pending mutate: %+v", r)
+	}
+	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Code: h.lastCode(), Choice: "s"}, &Empty{}); err != nil {
+		t.Fatal(err)
+	}
+	tch.ApprovalID = r.Pending
+	if r := h.exec(tch); r.Code != 0 || r.Exit != 0 {
+		t.Fatalf("approved run: %+v", r)
+	}
+	tch.ApprovalID = 0
+	if r := h.exec(tch); r.Pending != 0 || r.Exit != 0 {
 		t.Fatalf("sticky: %+v", r)
 	}
-	if r := h.exec(ExecArgs{Cmd: "rm -f " + victim}); r.Pending == 0 {
+	if r := h.exec(ExecArgs{Env: Env{Agent: "codex"}, Cmd: "touch -c " + victim}); r.Pending == 0 {
 		t.Fatalf("sticky leaked to another command: %+v", r)
 	}
 
@@ -329,6 +342,18 @@ func TestDaemonEndToEnd(t *testing.T) {
 	h.call("Decide", &DecideArgs{ID: r.Pending, Code: h.lastCode(), Choice: "m", Note: "not now"}, &Empty{})
 	if r2 := h.exec(ExecArgs{Cmd: "rm -rf /tmp/nothing-here", ApprovalID: r.Pending}); r2.Code != CodeDenied || !strings.Contains(r2.Msg, "not now") {
 		t.Fatalf("denied: %+v", r2)
+	}
+
+	// Destructive requests refuse the 30-minute option; one-off approval still works.
+	r = h.exec(ExecArgs{Cmd: "rm -rf /tmp/nothing-here2"})
+	if r.Level != "destructive" {
+		t.Fatalf("level: %+v", r)
+	}
+	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Code: h.lastCode(), Choice: "s"}, &Empty{}); err == nil || !strings.Contains(err.Error(), "cannot be approved for 30 minutes") {
+		t.Fatalf("destructive sticky: %v", err)
+	}
+	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Code: h.lastCode(), Choice: "y"}, &Empty{}); err != nil {
+		t.Fatalf("destructive once: %v", err)
 	}
 
 	// Transfers.
