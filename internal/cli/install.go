@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ASromancer/ostiary/internal/daemon"
 	"github.com/ASromancer/ostiary/plugin"
 )
 
@@ -16,7 +17,7 @@ import (
 // docs as of 2026-11; see README "Agents".
 
 var sshTools = []string{"ssh", "scp", "sftp", "mosh", "slogin"}
-var humanOnlySubs = []string{"approve", "key", "reload", "host", "init", "install-hooks", "unlock", "daemon", "install-service", "ui"}
+var humanOnlySubs = []string{"approve", "key", "reload", "host", "init", "install-hooks", "unlock", "daemon", "install-service", "uninstall-service", "ui"}
 
 type agentInstaller struct {
 	name    string
@@ -58,6 +59,40 @@ func hookFile(agent, home string) string {
 		return filepath.Join(home, ".gemini", "settings.json")
 	}
 	return filepath.Join(home, ".gemini", "config", "hooks.json")
+}
+
+// hookInstalled reports whether an Ostiary hook (or the Claude plugin) is
+// configured for agent under home.
+func hookInstalled(agent, home string) bool {
+	b, err := os.ReadFile(hookFile(agent, home))
+	if err != nil {
+		return false
+	}
+	s := string(b)
+	return strings.Contains(s, " hook "+agent) && strings.Contains(s, "ostiary") ||
+		agent == "claude" && strings.Contains(s, `"ostiary@`)
+}
+
+func agentStatesIn(home string) []daemon.AgentState {
+	out := make([]daemon.AgentState, 0, len(installers))
+	for _, in := range installers {
+		out = append(out, daemon.AgentState{Name: in.name, Detected: in.detect(home), Installed: hookInstalled(in.name, home)})
+	}
+	return out
+}
+
+func installHookFor(agent string) error {
+	home, _ := os.UserHomeDir()
+	for _, in := range installers {
+		if in.name == agent {
+			cmd, err := hookCommand(agent)
+			if err != nil {
+				return err
+			}
+			return in.install(home, cmd)
+		}
+	}
+	return fmt.Errorf("unknown agent %q", agent)
 }
 
 func codexHome(home string) string {

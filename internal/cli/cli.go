@@ -31,7 +31,7 @@ For agents:
 
 For the human user (need a real terminal; approvals and admin commands are confirmed
 in an OS authentication dialog, or with a code from a desktop notification as a fallback):
-  ostiary init [--passphrase] | unlock | lock | approve | reload | doctor | ui | daemon | install-polkit | install-service
+  ostiary init [--passphrase] | unlock | lock | approve | reload | doctor | ui | daemon | install-polkit | install-service | uninstall-service
   ostiary host add|edit|ls|rm|trust ...
   ostiary key gen|import|export|ls|rm ...
   ostiary log [--follow] [-n N]
@@ -69,7 +69,7 @@ func Main(args []string) int {
 		"job": cmdJob, "explain": cmdExplain, "hook": cmdHook,
 		"init": cmdInit, "unlock": cmdUnlock, "lock": cmdLock, "approve": cmdApprove,
 		"reload": cmdReload, "host": cmdHost, "key": cmdKey, "log": cmdLog, "doctor": cmdDoctor, "ui": cmdUI,
-		"install-hooks": cmdInstallHooks, "daemon": cmdDaemon, "install-polkit": cmdInstallPolkit, "install-service": cmdInstallService, "mcp": cmdMCP,
+		"install-hooks": cmdInstallHooks, "daemon": cmdDaemon, "install-polkit": cmdInstallPolkit, "install-service": cmdInstallService, "uninstall-service": cmdUninstallService, "mcp": cmdMCP,
 		"version": func([]string) int { fmt.Println("ostiary", Version); return 0 },
 	}
 	if f, ok := cmds[args[0]]; ok {

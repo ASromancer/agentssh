@@ -54,6 +54,7 @@ type Daemon struct {
 	pool   *sshconn.Pool
 	log    *audit.Log
 
+	setup   SetupFuncs
 	uiBase  string
 	uiLogin func() string
 }

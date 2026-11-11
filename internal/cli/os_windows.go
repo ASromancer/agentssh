@@ -52,8 +52,8 @@ func startDetached(logPath string, extra []string) error {
 }
 
 // installService registers a logon task that starts the daemon hidden,
-// then starts it now.
-func installService() error {
+// then starts it now when startNow.
+func installService(startNow bool) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -63,9 +63,23 @@ func installService() error {
 		"/TN", "ostiary", "/TR", tr).CombinedOutput(); err != nil {
 		return fmt.Errorf("schtasks: %v: %s", err, out)
 	}
-	if err := startDetached(filepath.Join(paths.State(), "daemon.log"), nil); err != nil {
-		return err
+	if startNow {
+		if err := startDetached(filepath.Join(paths.State(), "daemon.log"), nil); err != nil {
+			return err
+		}
 	}
 	fmt.Println("logon task 'ostiary' installed")
 	return nil
+}
+
+// removeService deletes the logon task; the running daemon is left alone.
+func removeService() error {
+	if out, err := exec.Command("schtasks", "/Delete", "/F", "/TN", "ostiary").CombinedOutput(); err != nil {
+		return fmt.Errorf("schtasks: %v: %s", err, out)
+	}
+	return nil
+}
+
+func serviceInstalled() bool {
+	return exec.Command("schtasks", "/Query", "/TN", "ostiary").Run() == nil
 }

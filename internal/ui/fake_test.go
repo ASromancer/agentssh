@@ -16,6 +16,8 @@ type fakeBackend struct {
 	admin   []daemon.AdminArgs
 	locked  bool
 	failAll bool
+	setup   daemon.SetupReply
+	skipped *bool
 }
 
 func (f *fakeBackend) Status() (daemon.StatusReply, error) {
@@ -62,4 +64,15 @@ func (f *fakeBackend) Unlock(pass string) error {
 func (f *fakeBackend) Lock() error { f.mu.Lock(); f.locked = true; f.mu.Unlock(); return nil }
 func (f *fakeBackend) Keys() ([]string, error) {
 	return []string{"web1-agent\tssh-ed25519 SHA256:abc"}, nil
+}
+func (f *fakeBackend) Setup() (daemon.SetupReply, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.setup, nil
+}
+func (f *fakeBackend) SetupSkip(skip bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.skipped = &skip
+	return nil
 }

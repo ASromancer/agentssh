@@ -65,6 +65,20 @@ func cmdDaemon(args []string) int {
 	if err != nil {
 		return errf(1, "%v", err)
 	}
+	d.SetSetup(daemon.SetupFuncs{
+		Agents: func() []daemon.AgentState {
+			home, _ := os.UserHomeDir()
+			return agentStatesIn(home)
+		},
+		InstallHook: installHookFor,
+		Autostart:   serviceInstalled,
+		SetAutostart: func(on bool) error {
+			if on {
+				return installService(false)
+			}
+			return removeService()
+		},
+	})
 	ln, err := d.Listen() // bind (and refuse a second daemon) before the UI starts
 	if err != nil {
 		return errf(1, "%v", err)
@@ -761,13 +775,28 @@ func oldUnit(path string) bool {
 	return err == nil && !strings.Contains(string(b), "graphical-session.target")
 }
 
+// cmdUninstallService removes the login autostart and leaves the running
+// daemon alone. --yes skips the TTY (the Windows uninstaller has no console).
+func cmdUninstallService(args []string) int {
+	if len(args) != 1 || args[0] != "--yes" {
+		if t, code := openTTY("uninstall-service"); t == nil {
+			return code
+		}
+	}
+	if err := removeService(); err != nil {
+		return errf(1, "%v", err)
+	}
+	fmt.Println("Ostiary will no longer start at login (the running daemon was left alone)")
+	return 0
+}
+
 // cmdInstallService re-runs the service install on an initialized setup, so
 // an upgrade can pick up a changed unit.
 func cmdInstallService(args []string) int {
 	if t, code := openTTY("install-service"); t == nil {
 		return code
 	}
-	if err := installService(); err != nil {
+	if err := installService(true); err != nil {
 		return errf(1, "%v", err)
 	}
 	fmt.Println("service updated; if approvals should use OS authentication, see 'ostiary install-polkit'")
@@ -787,12 +816,6 @@ func cmdInit(args []string) int {
 	if _, err := os.Stat(paths.Vault()); err == nil {
 		return errf(1, "already initialized (%s exists)", paths.Vault())
 	}
-	for _, d := range []string{paths.Config(), paths.State(), paths.Out()} {
-		if err := os.MkdirAll(d, 0o700); err != nil {
-			return errf(1, "%v", err)
-		}
-	}
-
 	key, salt := vault.NewKey(), []byte(nil)
 	keyringErr := errors.New("--passphrase given")
 	if !*usePass {
@@ -817,24 +840,19 @@ func cmdInit(args []string) int {
 		t.printf("master key stored in the OS keyring\n")
 	}
 
-	if _, err := os.Stat(paths.Hosts()); errors.Is(err, os.ErrNotExist) {
-		cfg := &hosts.Config{Hosts: map[string]*hosts.Host{}}
-		home, _ := os.UserHomeDir()
-		if imported, err := hosts.ImportSSHConfig(filepath.Join(home, ".ssh", "config")); err == nil {
-			cfg.Hosts = imported
-			t.printf("imported %d hosts from ~/.ssh/config (hidden from agents until 'ostiary host edit <name> --agent --key <key>')\n", len(imported))
-		}
-		if err := cfg.Save(paths.Hosts()); err != nil {
-			return errf(1, "%v", err)
-		}
-	}
-	if err := vault.Save(paths.Vault(), key, salt, &vault.Data{ConfigHash: daemon.ConfigHash()}); err != nil {
+	_, hostsErr := os.Stat(paths.Hosts())
+	if err := daemon.InitVault(key, salt); err != nil {
 		return errf(1, "%v", err)
+	}
+	if errors.Is(hostsErr, os.ErrNotExist) {
+		if cfg, err := hosts.Load(paths.Hosts()); err == nil && len(cfg.Hosts) > 0 {
+			t.printf("imported %d hosts from ~/.ssh/config (hidden from agents until 'ostiary host edit <name> --agent --key <key>')\n", len(cfg.Hosts))
+		}
 	}
 	t.printf("vault created: %s\n", paths.Vault())
 
 	if t.yes("install and start the ostiary user service?", true) {
-		if err := installService(); err != nil {
+		if err := installService(true); err != nil {
 			t.printf("service: %v\n", err)
 		}
 	}

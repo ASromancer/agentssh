@@ -37,6 +37,7 @@ func Vault() string      { return filepath.Join(Config(), "vault.bin") }
 func KnownHosts() string { return filepath.Join(Config(), "known_hosts") }
 func Audit() string      { return filepath.Join(State(), "audit.jsonl") }
 func Out() string        { return filepath.Join(State(), "out") }
+func SetupState() string { return filepath.Join(State(), "setup.json") }
 
 func Socket() string {
 	if s := os.Getenv("OSTIARY_SOCKET"); s != "" {

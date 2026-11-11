@@ -119,9 +119,38 @@ type AdminArgs struct {
 	Host     *hosts.Host
 	PEM      []byte
 	Password []byte
+	Pass     []byte // vault passphrase for init (never logged)
 }
 
 type AdminReply struct{ Out string }
+
+// AgentState is one agent's setup state, for the onboarding guide.
+type AgentState struct {
+	Name      string // claude | codex | gemini | antigravity
+	Detected  bool   // the agent's config dir exists
+	Installed bool   // our hook/plugin is configured
+}
+
+// SetupFuncs are the agent/service helpers that live in package cli.
+type SetupFuncs struct {
+	Agents       func() []AgentState
+	InstallHook  func(agent string) error
+	Autostart    func() bool
+	SetAutostart func(on bool) error
+}
+
+type SetupReply struct {
+	VaultReady    bool // vault file exists
+	Locked        bool
+	Hosts         int
+	Keys          int // keys + passwords; -1 while locked
+	Agents        []AgentState
+	Autostart     bool
+	PolkitMissing bool // linux only: the polkit policy file is absent
+	Skipped       bool // the user hid the guide
+}
+
+type SetupSkipArgs struct{ Skip bool }
 
 type KeysReply struct{ Keys []string }
 

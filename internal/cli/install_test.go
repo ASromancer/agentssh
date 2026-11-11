@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/ASromancer/ostiary/internal/daemon"
 )
 
 func TestAddClaudeHookIdempotent(t *testing.T) {
@@ -59,5 +61,27 @@ func TestInstallAllAgents(t *testing.T) {
 	var pol map[string]any
 	if _, err := toml.DecodeFile(filepath.Join(home, ".gemini", "policies", "ostiary.toml"), &pol); err != nil {
 		t.Errorf("gemini policy is not valid TOML: %v", err)
+	}
+}
+
+func TestAgentStates(t *testing.T) {
+	home := t.TempDir()
+	os.MkdirAll(filepath.Join(home, ".claude"), 0o700)
+	var claude daemon.AgentState
+	for _, s := range agentStatesIn(home) {
+		if s.Name == "claude" {
+			claude = s
+		}
+	}
+	if !claude.Detected || claude.Installed {
+		t.Fatalf("before: %+v", claude)
+	}
+	if err := installClaude(home, `"/x/ostiary" hook claude`); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range agentStatesIn(home) {
+		if s.Name == "claude" && !s.Installed {
+			t.Fatal("installed hook not detected")
+		}
 	}
 }

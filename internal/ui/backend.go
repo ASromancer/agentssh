@@ -18,6 +18,8 @@ type Backend interface {
 	Unlock(pass string) error
 	Lock() error
 	Keys() ([]string, error)
+	Setup() (daemon.SetupReply, error)
+	SetupSkip(skip bool) error
 }
 
 type ServiceBackend struct{ S *daemon.Service }
@@ -51,4 +53,11 @@ func (b ServiceBackend) Keys() ([]string, error) {
 	var r daemon.KeysReply
 	err := b.S.Keys(&daemon.Empty{}, &r)
 	return r.Keys, err
+}
+func (b ServiceBackend) Setup() (r daemon.SetupReply, err error) {
+	err = b.S.Setup(&daemon.Empty{}, &r)
+	return
+}
+func (b ServiceBackend) SetupSkip(skip bool) error {
+	return b.S.SetupSkip(&daemon.SetupSkipArgs{Skip: skip}, &daemon.Empty{})
 }

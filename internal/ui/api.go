@@ -100,6 +100,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 			Code, Op, Name               string
 			Host                         *hosts.Host
 			Key, KeyPassphrase, Password string
+			Pass                         string
 		}
 		if !readJSON(w, r, &a) {
 			return
@@ -116,12 +117,34 @@ func (s *Server) routes(mux *http.ServeMux) {
 		if a.Password != "" {
 			args.Password = []byte(a.Password)
 		}
+		if a.Pass != "" {
+			args.Pass = []byte(a.Pass)
+		}
 		rep, err := b.Admin(args)
 		if err != nil {
 			fail(w, err)
 			return
 		}
 		writeJSON(w, map[string]string{"out": rep.Out})
+	})
+	mux.HandleFunc("GET /api/setup", func(w http.ResponseWriter, r *http.Request) {
+		rep, err := b.Setup()
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		writeJSON(w, rep)
+	})
+	mux.HandleFunc("POST /api/setup/skip", func(w http.ResponseWriter, r *http.Request) {
+		var a struct{ Skip bool }
+		if !readJSON(w, r, &a) {
+			return
+		}
+		if err := b.SetupSkip(a.Skip); err != nil {
+			fail(w, err)
+			return
+		}
+		writeJSON(w, struct{}{})
 	})
 	mux.HandleFunc("POST /api/unlock", func(w http.ResponseWriter, r *http.Request) {
 		var a struct{ Pass string }

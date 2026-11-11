@@ -20,6 +20,7 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 
 	"github.com/ASromancer/ostiary/internal/approval"
+	"github.com/ASromancer/ostiary/internal/daemon"
 	"github.com/ASromancer/ostiary/internal/paths"
 )
 
@@ -74,6 +75,20 @@ func TestAPIDecideAndAdmin(t *testing.T) {
 	}
 	if w := api(t, s, "GET", "/api/hosts", ""); !strings.Contains(w.Body.String(), `"web1"`) {
 		t.Fatalf("hosts: %s", w.Body.String())
+	}
+}
+
+func TestAPISetup(t *testing.T) {
+	f := &fakeBackend{setup: daemon.SetupReply{VaultReady: true, Hosts: 3, Agents: []daemon.AgentState{{Name: "claude", Detected: true}}}}
+	s := newServer(Options{Backend: f, Version: "9.9"}, 8123)
+	if w := api(t, s, "GET", "/api/setup", ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"Hosts":3`) || !strings.Contains(w.Body.String(), `"claude"`) {
+		t.Fatalf("setup: %d %s", w.Code, w.Body.String())
+	}
+	if w := api(t, s, "POST", "/api/setup/skip", `{"skip":true}`); w.Code != 200 || f.skipped == nil || !*f.skipped {
+		t.Fatalf("skip: %d %v", w.Code, f.skipped)
+	}
+	if w := api(t, s, "POST", "/api/admin/commit", `{"ticket":1,"op":"init","name":"passphrase","pass":"x"}`); w.Code != 200 || string(f.admin[0].Pass) != "x" {
+		t.Fatalf("pass: %d %+v", w.Code, f.admin)
 	}
 }
 

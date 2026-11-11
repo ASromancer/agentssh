@@ -49,7 +49,9 @@ func systemdUnit(exe string) string {
 		"[Install]\nWantedBy=graphical-session.target\n", exe)
 }
 
-func installService() error {
+// installService installs the autostart. startNow=false (UI toggle) only
+// registers it: the daemon serving the UI is already running.
+func installService(startNow bool) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -66,12 +68,18 @@ func installService() error {
 		if out, err := exec.Command("systemctl", "--user", "daemon-reload").CombinedOutput(); err != nil {
 			return fmt.Errorf("%v: %s", err, out)
 		}
-		if out, err := exec.Command("systemctl", "--user", "enable", "--now", "ostiary.service").CombinedOutput(); err != nil {
+		enable := []string{"--user", "enable", "ostiary.service"}
+		if startNow {
+			enable = []string{"--user", "enable", "--now", "ostiary.service"}
+		}
+		if out, err := exec.Command("systemctl", enable...).CombinedOutput(); err != nil {
 			return fmt.Errorf("%v: %s", err, out)
 		}
-		// Let the daemon see the graphical session (humanok checks DISPLAY/WAYLAND_DISPLAY).
-		_ = exec.Command("systemctl", "--user", "import-environment", "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY").Run()
-		_ = exec.Command("systemctl", "--user", "restart", "ostiary.service").Run()
+		if startNow {
+			// Let the daemon see the graphical session (humanok checks DISPLAY/WAYLAND_DISPLAY).
+			_ = exec.Command("systemctl", "--user", "import-environment", "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY").Run()
+			_ = exec.Command("systemctl", "--user", "restart", "ostiary.service").Run()
+		}
 	case "darwin":
 		p := filepath.Join(home, "Library", "LaunchAgents", "dev.ostiary.plist")
 		plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
@@ -86,12 +94,51 @@ func installService() error {
 		if err := writeFile(p, plist); err != nil {
 			return err
 		}
-		if out, err := exec.Command("launchctl", "load", "-w", p).CombinedOutput(); err != nil {
-			return fmt.Errorf("%v: %s", err, out)
+		if startNow { // otherwise it loads at next login
+			if out, err := exec.Command("launchctl", "load", "-w", p).CombinedOutput(); err != nil {
+				return fmt.Errorf("%v: %s", err, out)
+			}
 		}
 	default: // unreachable: build tags limit this file to linux and darwin
 		return fmt.Errorf("no service manager support for %s; run 'ostiary daemon' yourself", runtime.GOOS)
 	}
-	fmt.Println("service installed and started")
+	fmt.Println("service installed")
 	return nil
+}
+
+func unitPath(home string) string {
+	return filepath.Join(home, ".config", "systemd", "user", "ostiary.service")
+}
+
+func plistPath(home string) string {
+	return filepath.Join(home, "Library", "LaunchAgents", "dev.ostiary.plist")
+}
+
+// removeService drops the login autostart; the running daemon is left alone.
+func removeService() error {
+	home, _ := os.UserHomeDir()
+	p := plistPath(home)
+	if runtime.GOOS == "linux" {
+		p = unitPath(home)
+		_ = exec.Command("systemctl", "--user", "disable", "ostiary.service").Run() // not loaded is fine
+	}
+	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if runtime.GOOS == "linux" {
+		_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
+	}
+	return nil
+}
+
+func serviceInstalled() bool {
+	home, _ := os.UserHomeDir()
+	if runtime.GOOS == "linux" {
+		if _, err := os.Stat(unitPath(home)); err != nil {
+			return false
+		}
+		return exec.Command("systemctl", "--user", "is-enabled", "ostiary.service").Run() == nil
+	}
+	_, err := os.Stat(plistPath(home))
+	return err == nil
 }
