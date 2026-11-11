@@ -2,9 +2,9 @@
 """End-to-end test: the real agentssh binary against a real OpenSSH sshd.
 
 Linux/macOS only. Everything lives in a temp dir (HOME, XDG dirs, sshd), so
-it never touches your keyring, ~/.claude or services. The D-Bus session is
-hidden, which forces passphrase mode and makes desktop notifications fail,
-so approval codes are shown in the terminal where this script can read them.
+it never touches your keyring, ~/.claude or services. init runs in
+passphrase mode, and notify-send/osascript are replaced by stubs that append
+each notification to a file, where this script reads the approval codes.
 
 usage: go build -o /tmp/agentssh . && python3 scripts/e2e.py /tmp/agentssh
 """
@@ -22,6 +22,13 @@ ENV.update(HOME=HOME, XDG_CONFIG_HOME=f"{HOME}/.config", XDG_STATE_HOME=f"{HOME}
            XDG_RUNTIME_DIR=f"{TMP}/run", AGENTSSH_SOCKET=f"{TMP}/s.sock",
            DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent", TERM="dumb")
 os.makedirs(ENV["XDG_RUNTIME_DIR"], mode=0o700)
+NOTES = os.path.join(TMP, "notifications.log")
+os.makedirs(f"{TMP}/bin")
+for stub in ("notify-send", "osascript"):
+    with open(f"{TMP}/bin/{stub}", "w") as f:
+        f.write(f'#!/bin/sh\necho "$*" >> "{NOTES}"\n')
+    os.chmod(f"{TMP}/bin/{stub}", 0o755)
+ENV["PATH"] = f"{TMP}/bin:" + ENV["PATH"]
 
 passed = 0
 
@@ -94,14 +101,21 @@ class Tty:
         return self.p.wait(timeout=5)
 
 
-def admin(*args, extra=None):
-    """Run a code-protected admin command, reading the fallback code from the screen."""
+def last_code():
+    """The code from the most recent desktop notification."""
+    for _ in range(50):
+        codes = re.findall(r"code: ([A-Z0-9]{4})", open(NOTES).read()) if os.path.exists(NOTES) else []
+        if codes:
+            return codes[-1]
+        time.sleep(0.1)
+    raise AssertionError("no notification with a code")
+
+
+def admin(*args):
+    """Run a code-protected admin command with the code from the notification."""
     t = Tty(*args)
-    code = t.expect(r"approval code: ([A-Z0-9]{4})").group(1)
-    if extra:
-        extra(t)
     t.expect(r"approval code \(from the desktop notification\): ")
-    t.send(code)
+    t.send(last_code())
     rc = t.wait()
     return rc, t.buf
 
@@ -239,7 +253,7 @@ def main():
         t = Tty("approve")
         t.expect(r"level: .*DESTRUCTIVE")
         t.expect(r"rm " + re.escape(victim))
-        code = t.expect(r"approval code: ([A-Z0-9]{4})").group(1)
+        code = last_code()
         t.expect(r"approval code \(from the desktop notification\): ")
         t.send("ZZZZ")
         t.expect(r"\[y\] once")
@@ -260,7 +274,8 @@ def main():
         agent = subprocess.Popen([BIN, "run", "e2e", f"rm {victim2}"], env=ENV, stdin=subprocess.DEVNULL,
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         t = Tty("approve")
-        code = t.expect(r"approval code: ([A-Z0-9]{4})").group(1)
+        t.expect(r"DESTRUCTIVE")
+        code = last_code()
         t.expect(r"approval code \(from the desktop notification\): ")
         t.send(code)
         t.expect(r"\[y\] once")
@@ -311,7 +326,7 @@ def main():
               "audit log has decisions and no output", out)
 
         rc, out, _ = run("doctor")
-        check("ok    daemon is running" in out and "WARN  desktop notifications do not work" in out, "doctor", out)
+        check("ok    daemon is running" in out and "ok    desktop notification sent" in out, "doctor", out)
 
         # Config edited behind the daemon's back.
         with open(f"{HOME}/.config/agentssh/hosts.toml", "a") as f:
@@ -328,9 +343,8 @@ def main():
         check(rc == 0 and rc2 == 0, "reload with code accepts the config again", out)
 
         t = Tty("key", "export", "e2e")
-        code = t.expect(r"approval code: ([A-Z0-9]{4})").group(1)
         t.expect(r"approval code \(from the desktop notification\): ")
-        t.send(code)
+        t.send(last_code())
         t.expect("vault passphrase: ")
         t.send(PASS)
         t.wait()
