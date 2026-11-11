@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -23,5 +24,15 @@ func TestOldUnit(t *testing.T) {
 	}
 	if oldUnit(filepath.Join(d, "missing")) {
 		t.Error("missing unit flagged")
+	}
+}
+
+func TestDoctorChecksShape(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("AGENTSSH_SOCKET", filepath.Join(t.TempDir(), "none.sock"))
+	checks := doctorChecks(false)
+	if len(checks) == 0 || checks[0].OK || !strings.Contains(checks[0].Text, "daemon is not running") {
+		t.Fatalf("%+v", checks)
 	}
 }

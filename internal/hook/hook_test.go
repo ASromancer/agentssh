@@ -79,6 +79,7 @@ func TestBash(t *testing.T) {
 		{`rsync -av C:/src/ D:/backup/`, ""},
 		{`cat $APPDATA/agentssh/hosts.toml`, "ask"},
 		// Restarting the daemon could switch it to codes: human only.
+		{`agentssh ui`, "deny"},
 		{`agentssh daemon --detach`, "deny"},
 		{`AGENTSSH_OS_AUTH=0 agentssh daemon`, "deny"},
 		{`systemctl --user restart agentssh.service`, "deny"},
@@ -118,6 +119,13 @@ func TestBash(t *testing.T) {
 }
 
 func TestEditWrite(t *testing.T) {
+	// Writing a document that merely mentions agentssh's paths is fine;
+	// writing INTO them is not.
+	doc := map[string]any{"file_path": filepath.Join(home, "work", "notes.md"),
+		"content": "state lives in " + filepath.Join(home, ".config", "agentssh")}
+	if got := run(t, "Write", doc); got != "" {
+		t.Errorf("write mentioning agentssh paths: %q", got)
+	}
 	if got := run(t, "Write", map[string]any{"file_path": filepath.Join(home, ".config", "agentssh", "hosts.toml")}); got != "deny" {
 		t.Errorf("write config: %q", got)
 	}

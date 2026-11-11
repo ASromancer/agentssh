@@ -162,6 +162,17 @@ When the agent runs something destructive:
 
 **Fallback: codes.** Without OS authentication (turned off, no local graphical session, polkit action missing or installed for another user), the notification carries a 4-character code that you type after choosing. Three wrong codes deny the request. A daemon that started in OS mode never switches to codes by itself (see above). `agentssh doctor` shows which mode is active.
 
+## GUI
+
+The daemon serves a local page on `127.0.0.1` with a random port. Open it with `agentssh ui` or from the tray icon. Clicking an approval notification (Linux, Windows) opens it at that request.
+
+- **Duyệt:** pending requests with the exact command (risky parts highlighted), approve once, approve 30 minutes, deny, or deny with a message. Approving shows the OS authentication dialog, as in the terminal.
+- **Host:** add, edit, delete, trust a host key, reload the config.
+- **Vault & key:** lock and unlock; generate, import and delete keys. Private keys are never shown; exporting stays in the terminal (`agentssh key export`).
+- **Nhật ký & trạng thái:** the `doctor` checks and the audit log, with each command's full output.
+
+The page needs a per-start token, which `agentssh ui` and the tray pass for you. It refuses other hosts and cross-origin requests, and everything it changes goes through the daemon's OS authentication. Flags: `agentssh daemon --no-ui`, `--no-tray`, `--ui-port N`. On GNOME the tray icon needs the AppIndicator extension (preinstalled on Ubuntu).
+
 ## Threat model — read this
 
 - **Default mode: the daemon runs as your user.** It protects against an agent that has been prompt-injected and uses its normal tools (Bash, Edit, Write) to:

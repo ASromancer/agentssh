@@ -24,6 +24,8 @@ import (
 	"github.com/ASromancer/agentssh/internal/humanok"
 	"github.com/ASromancer/agentssh/internal/paths"
 	"github.com/ASromancer/agentssh/internal/policy"
+	"github.com/ASromancer/agentssh/internal/tray"
+	"github.com/ASromancer/agentssh/internal/ui"
 	"github.com/ASromancer/agentssh/internal/vault"
 )
 
@@ -33,9 +35,13 @@ func cmdDaemon(args []string) int {
 	fs := newFlags("daemon")
 	detach := fs.Bool("detach", false, "start the daemon in the background and return")
 	logFile := fs.String("log", "", "append logs to this file")
+	noUI := fs.Bool("no-ui", false, "do not serve the local web UI")
+	noTray := fs.Bool("no-tray", false, "do not show the tray icon")
+	uiPort := fs.Int("ui-port", 0, "UI port on 127.0.0.1 (0 = random)")
 	if _, err := parse(fs, args); err != nil {
 		return 2
 	}
+	*noTray = *noTray || os.Getenv("AGENTSSH_NO_TRAY") == "1"
 	if *detach {
 		if err := startDetached(filepath.Join(paths.State(), "daemon.log")); err != nil {
 			return errf(1, "%v", err)
@@ -54,9 +60,52 @@ func cmdDaemon(args []string) int {
 	if err != nil {
 		return errf(1, "%v", err)
 	}
-	if err := d.Serve(); err != nil {
+	svc := d.Service()
+	var srv *ui.Server
+	if !*noUI {
+		srv, err = ui.Start(ui.Options{
+			Backend: ui.ServiceBackend{S: svc}, Port: *uiPort, Version: Version,
+			URLFile: filepath.Join(paths.State(), "ui.url"), AuditFile: paths.Audit(),
+			Doctor: func() []ui.Check { return doctorChecks(false) },
+		})
+		if err != nil {
+			log.Printf("ui: %v (continuing without the UI)", err)
+			srv = nil
+		} else {
+			defer srv.Close()
+			d.SetNotifyLink(srv.Link)
+			log.Printf("ui on %s", strings.SplitN(srv.URL(), "?", 2)[0])
+		}
+	}
+	served := make(chan error, 1)
+	stop := make(chan struct{})
+	go func() { served <- d.Serve(); close(stop) }()
+	if !*noTray && srv != nil && tray.Supported() {
+		tray.Run(tray.Options{
+			URL: srv.URL(), Open: approval.OpenURL,
+			Lock: func() error { return svc.Lock(&daemon.Empty{}, &daemon.Empty{}) },
+			Pending: func() int {
+				var p []approval.Request
+				svc.Pending(&daemon.Empty{}, &p)
+				return len(p)
+			},
+		}, stop)
+	}
+	if err := <-served; err != nil {
 		log.Print(err)
 		return 1
+	}
+	return 0
+}
+
+func cmdUI(args []string) int {
+	b, err := os.ReadFile(filepath.Join(paths.State(), "ui.url"))
+	u := strings.TrimSpace(string(b))
+	if err != nil || u == "" {
+		return errf(1, "the agentssh UI is not running (is the daemon up? started with --no-ui?)")
+	}
+	if err := approval.OpenURL(u); err != nil {
+		fmt.Println("open this address in your browser:", u)
 	}
 	return 0
 }
@@ -549,10 +598,12 @@ func printEntry(line string) {
 		orDash(e.Host), orDash(e.Level), e.Decision, exit, e.Cmd, note)
 }
 
-func cmdDoctor(args []string) int {
-	problems := 0
-	ok := func(s string) { fmt.Println("ok    " + s) }
-	warn := func(s string) { problems++; fmt.Println("WARN  " + s) }
+// doctorChecks runs the doctor checks. notify=false skips sending the test
+// notification (the UI calls this often).
+func doctorChecks(notify bool) []ui.Check {
+	var out []ui.Check
+	ok := func(s string) { out = append(out, ui.Check{OK: true, Text: s}) }
+	warn := func(s string) { out = append(out, ui.Check{OK: false, Text: s}) }
 
 	if c, err := daemon.Dial(); err != nil {
 		warn("daemon is not running (systemctl --user start agentssh, or agentssh daemon --detach)")
@@ -582,6 +633,12 @@ func cmdDoctor(args []string) int {
 		c.Close()
 	}
 
+	if b, err := os.ReadFile(filepath.Join(paths.State(), "ui.url")); err == nil && len(b) > 0 {
+		ok("UI is running (agentssh ui)")
+	} else {
+		warn("UI is not running (daemon started with --no-ui, or an older daemon)")
+	}
+
 	home, _ := os.UserHomeDir()
 	for _, in := range installers {
 		if !in.detect(home) {
@@ -595,11 +652,13 @@ func cmdDoctor(args []string) int {
 		}
 	}
 
-	if err := approval.Notify(approval.Notice{Title: "agentssh doctor", Body: "test notification"}); err != nil {
-		warn("desktop notifications do not work (" + err.Error() + "): approval codes will be shown in the terminal, " +
-			"so an agent that can fake a TTY could approve itself; prefer hardened mode on this machine")
-	} else {
-		ok("desktop notification sent (check that you saw it)")
+	if notify {
+		if err := approval.Notify(approval.Notice{Title: "agentssh doctor", Body: "test notification"}); err != nil {
+			warn("desktop notifications do not work (" + err.Error() + "): approval codes will be shown in the terminal, " +
+				"so an agent that can fake a TTY could approve itself; prefer hardened mode on this machine")
+		} else {
+			ok("desktop notification sent (check that you saw it)")
+		}
 	}
 
 	if runtime.GOOS == "linux" && oldUnit(filepath.Join(home, ".config", "systemd", "user", "agentssh.service")) {
@@ -617,6 +676,19 @@ func cmdDoctor(args []string) int {
 		}
 		if _, err := ssh.ParseRawPrivateKey(b); err == nil {
 			warn(k + " has no passphrase: agents running as you can read it")
+		}
+	}
+	return out
+}
+
+func cmdDoctor(args []string) int {
+	problems := 0
+	for _, c := range doctorChecks(true) {
+		if c.OK {
+			fmt.Println("ok    " + c.Text)
+		} else {
+			problems++
+			fmt.Println("WARN  " + c.Text)
 		}
 	}
 	if problems == 0 {
