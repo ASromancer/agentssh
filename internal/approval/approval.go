@@ -136,7 +136,7 @@ func (q *Queue) Add(r Request) bool {
 	if q.Link != nil && !codes {
 		link = q.Link(r.ID)
 	}
-	err := q.Notify(Notice{Title: "ostiary approval #" + fmt.Sprint(r.ID), Body: body, Link: link})
+	err := q.Notify(Notice{Title: "Ostiary approval #" + fmt.Sprint(r.ID), Body: body, Link: link})
 	if err != nil && codes {
 		e.req.Code = e.code
 	}

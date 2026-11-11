@@ -709,7 +709,7 @@ func doctorChecks(notify bool) []ui.Check {
 	}
 
 	if notify {
-		if err := approval.Notify(approval.Notice{Title: "ostiary doctor", Body: "test notification"}); err != nil {
+		if err := approval.Notify(approval.Notice{Title: "Ostiary doctor", Body: "test notification"}); err != nil {
 			warn("desktop notifications do not work (" + err.Error() + "): approval codes will be shown in the terminal, " +
 				"so an agent that can fake a TTY could approve itself; prefer hardened mode on this machine")
 		} else {
