@@ -30,7 +30,7 @@ func run(t *testing.T, tool string, input map[string]any) string {
 	t.Helper()
 	in, _ := json.Marshal(map[string]any{"tool_name": tool, "tool_input": input, "cwd": home, "hook_event_name": "PreToolUse"})
 	var out bytes.Buffer
-	if err := Claude(bytes.NewReader(in), &out, []string{filepath.Join(home, ".config", "agentssh"), filepath.Join(home, ".local", "state", "agentssh")}, fakeExplain); err != nil {
+	if err := Claude(bytes.NewReader(in), &out, append([]string{filepath.Join(home, ".config", "agentssh"), filepath.Join(home, ".local", "state", "agentssh")}, ServicePaths(home)...), fakeExplain); err != nil {
 		t.Fatal(err)
 	}
 	if out.Len() == 0 {
@@ -89,6 +89,26 @@ func TestBash(t *testing.T) {
 		{`killall agentssh`, "deny"},
 		{`kill 1234`, ""},
 		{`/usr/bin/pkill agentssh`, "deny"},
+		{`kill -9 $(pgrep agentssh)`, "deny"},
+		{`kill $(pidof AgentSSH)`, "deny"},
+		{`launchctl kickstart -k gui/501/dev.agentssh`, "deny"},
+		// Changing how user services start: human only, agentssh named or not.
+		{`systemctl --user set-environment LD_PRELOAD=/tmp/x.so`, "deny"},
+		{`systemctl --user unset-environment DISPLAY`, "deny"},
+		{`systemctl --user import-environment`, "deny"},
+		{`systemctl --user daemon-reload`, "deny"},
+		{`systemctl --user edit foo`, "deny"},
+		{`systemctl --user revert foo`, "deny"},
+		{`launchctl setenv DYLD_INSERT_LIBRARIES /tmp/x`, "deny"},
+		{`launchctl unsetenv PATH`, "deny"},
+		{`launchctl kickstart -k gui/501/com.example`, "deny"},
+		{`launchctl bootout gui/501/com.example`, "deny"},
+		{`launchctl unload ~/Library/LaunchAgents/x.plist`, "deny"},
+		{`launchctl load ~/Library/LaunchAgents/x.plist`, "deny"},
+		{`systemctl status nginx`, ""},
+		{`systemctl --user status pipewire`, ""},
+		{`launchctl list`, ""},
+		{`echo X=1 >> ~/.config/environment.d/x.conf`, "ask"},
 	} {
 		if got := run(t, "Bash", map[string]any{"command": tc.cmd}); got != tc.want {
 			t.Errorf("%s: got %q want %q", tc.cmd, got, tc.want)
@@ -102,6 +122,14 @@ func TestEditWrite(t *testing.T) {
 	}
 	if got := run(t, "Edit", map[string]any{"file_path": filepath.Join(home, ".local", "state", "agentssh", "audit.jsonl")}); got != "deny" {
 		t.Errorf("edit audit: %q", got)
+	}
+	for _, p := range []string{
+		filepath.Join(home, ".config", "systemd", "user", "agentssh.service.d", "override.conf"),
+		filepath.Join(home, ".config", "environment.d", "50-x.conf"),
+	} {
+		if got := run(t, "Write", map[string]any{"file_path": p}); got != "deny" {
+			t.Errorf("write %s: %q", p, got)
+		}
 	}
 	if got := run(t, "Edit", map[string]any{"file_path": filepath.Join(home, "work", "main.go")}); got != "" {
 		t.Errorf("normal edit: %q", got)
