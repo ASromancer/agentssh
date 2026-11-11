@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/ASromancer/agentssh/internal/audit"
 	"github.com/ASromancer/agentssh/internal/daemon"
 	"github.com/ASromancer/agentssh/internal/hosts"
+	"github.com/ASromancer/agentssh/internal/humanok"
 	"github.com/ASromancer/agentssh/internal/paths"
 	"github.com/ASromancer/agentssh/internal/policy"
 	"github.com/ASromancer/agentssh/internal/vault"
@@ -48,7 +50,7 @@ func cmdDaemon(args []string) int {
 		}
 		log.SetOutput(f)
 	}
-	d, err := daemon.New(approval.Desktop, approvalTimeout)
+	d, err := daemon.New(approval.Notify, approvalTimeout)
 	if err != nil {
 		return errf(1, "%v", err)
 	}
@@ -59,7 +61,8 @@ func cmdDaemon(args []string) int {
 	return 0
 }
 
-// admin runs a code-protected admin operation (spec 5.2).
+// admin runs an admin operation confirmed by OS authentication or, when
+// the daemon started in code mode, a code.
 func admin(t *term, a daemon.AdminArgs) (string, int) {
 	c, code := dial()
 	if c == nil {
@@ -77,6 +80,14 @@ func admin(t *term, a daemon.AdminArgs) (string, int) {
 		t.printf("desktop notification failed; approval code: %s\n", b.Code)
 	}
 	a.Ticket = b.Ticket
+	if b.OSAuth {
+		t.printf("confirm in the system authentication dialog…\n")
+		var r daemon.AdminReply
+		if err := c.Call("A.Admin", &a, &r); err != nil {
+			return "", errf(1, "%v", err)
+		}
+		return r.Out, 0
+	}
 	for {
 		a.Code = t.prompt("approval code (from the desktop notification): ")
 		var r daemon.AdminReply
@@ -190,6 +201,11 @@ func cmdApprove(args []string) int {
 		return code
 	}
 	defer c.Close()
+	var st daemon.StatusReply
+	if err := c.Call("A.Status", &daemon.Empty{}, &st); err != nil {
+		return callErr(err)
+	}
+	osAuth := st.Auth == "os"
 	handled, waiting := 0, false
 	for {
 		var reqs []approval.Request
@@ -208,7 +224,7 @@ func cmdApprove(args []string) int {
 			continue
 		}
 		for _, r := range reqs {
-			decideOne(t, c, r)
+			decideOne(t, c, r, osAuth)
 			handled++
 		}
 	}
@@ -216,7 +232,7 @@ func cmdApprove(args []string) int {
 
 func decideOne(t *term, c interface {
 	Call(string, any, any) error
-}, r approval.Request) {
+}, r approval.Request, osAuth bool) {
 	t.printf("\n%s#%d%s  %s  agent=%s  kind=%s\n", bold, r.ID, reset, r.Time.Format("2006-01-02 15:04:05"), orDash(r.Agent), r.Kind)
 	t.printf("host:  %s (user %s)\ncwd:   %s\nrepo:  %s\n", r.Host, orDash(r.User), orDash(r.Cwd), orDash(r.Repo))
 	t.printf("level: %s%s%s\n", red, strings.ToUpper(r.Level), reset)
@@ -234,7 +250,6 @@ func decideOne(t *term, c interface {
 		t.printf("desktop notification failed; approval code: %s\n", r.Code)
 	}
 	for {
-		code := t.prompt("approval code (from the desktop notification): ")
 		choice := ""
 		for choice == "" {
 			switch a := strings.ToLower(t.prompt("[y] once  [s] same command 30 min  [n] deny  [m] deny with message: ")); a {
@@ -242,9 +257,16 @@ func decideOne(t *term, c interface {
 				choice = a
 			}
 		}
-		note := ""
+		note, code := "", ""
 		if choice == "m" {
 			note = t.prompt("message for the agent: ")
+		}
+		switch {
+		case choice == "n":
+		case osAuth:
+			t.printf("confirm in the system authentication dialog…\n")
+		default:
+			code = t.prompt("approval code (from the desktop notification): ")
 		}
 		err := c.Call("A.Decide", &daemon.DecideArgs{ID: r.ID, Code: code, Choice: choice, Note: note}, &daemon.Empty{})
 		if err == nil {
@@ -252,10 +274,20 @@ func decideOne(t *term, c interface {
 			return
 		}
 		t.printf("%v\n", err)
-		if !strings.Contains(err.Error(), "tries left") {
+		// Back to the choice prompt: the user can retry, or deny with n.
+		if !strings.Contains(err.Error(), "tries left") && !strings.Contains(err.Error(), "not confirmed") &&
+			!strings.Contains(err.Error(), "already in progress") && !strings.Contains(err.Error(), "OS authentication failed") {
 			return
 		}
 	}
+}
+
+func cmdInstallPolkit(args []string) int {
+	if err := humanok.InstallPolicy(); err != nil {
+		return errf(1, "%v", err)
+	}
+	fmt.Println("installed", humanok.PolicyPath, "— restart the daemon: systemctl --user restart agentssh")
+	return 0
 }
 
 func orDash(s string) string {
@@ -541,6 +573,11 @@ func cmdDoctor(args []string) int {
 			if st.UserOnly {
 				warn("config changed on disk; agent requests are refused until 'agentssh reload'")
 			}
+			if st.Auth == "os" {
+				ok("approvals use OS authentication")
+			} else {
+				warn("approvals use codes from desktop notifications (" + st.AuthNote + ")")
+			}
 		}
 		c.Close()
 	}
@@ -558,11 +595,15 @@ func cmdDoctor(args []string) int {
 		}
 	}
 
-	if err := approval.Desktop("agentssh doctor", "test notification"); err != nil {
+	if err := approval.Notify("agentssh doctor", "test notification"); err != nil {
 		warn("desktop notifications do not work (" + err.Error() + "): approval codes will be shown in the terminal, " +
 			"so an agent that can fake a TTY could approve itself; prefer hardened mode on this machine")
 	} else {
 		ok("desktop notification sent (check that you saw it)")
+	}
+
+	if runtime.GOOS == "linux" && oldUnit(filepath.Join(home, ".config", "systemd", "user", "agentssh.service")) {
+		warn("the agentssh service starts before your desktop session (old unit); run 'agentssh install-service' to update it")
 	}
 
 	keys, _ := filepath.Glob(filepath.Join(home, ".ssh", "id_*"))
@@ -583,6 +624,26 @@ func cmdDoctor(args []string) int {
 		return 0
 	}
 	return 1
+}
+
+// oldUnit reports whether the systemd unit at path exists but does not start
+// with the graphical session.
+func oldUnit(path string) bool {
+	b, err := os.ReadFile(path)
+	return err == nil && !strings.Contains(string(b), "graphical-session.target")
+}
+
+// cmdInstallService re-runs the service install on an initialized setup, so
+// an upgrade can pick up a changed unit.
+func cmdInstallService(args []string) int {
+	if t, code := openTTY("install-service"); t == nil {
+		return code
+	}
+	if err := installService(); err != nil {
+		return errf(1, "%v", err)
+	}
+	fmt.Println("service updated; if approvals should use OS authentication, see 'agentssh install-polkit'")
+	return 0
 }
 
 func cmdInit(args []string) int {

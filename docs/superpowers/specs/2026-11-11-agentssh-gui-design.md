@@ -103,6 +103,28 @@ Khi đó daemon quay về cơ chế mã 4 ký tự gửi qua thông báo desktop
 3. **Windows Hello PIN:** `LogonUserW` không xác minh được PIN. Nếu CredUI trả về PIN thì dùng `UserConsentVerifier` (WinRT) thay thế, hoặc chỉ chấp nhận mật khẩu Windows. Phải chốt sau khi spike.
 4. **macOS:** LocalAuthentication có chạy được từ LaunchAgent không. Nếu không thì để tiến trình tray gọi rồi báo kết quả cho daemon qua socket. Tray chạy trong phiên Aqua, nhưng daemon phải kiểm tra tray đúng là tiến trình con của nó.
 
+### 4.6 Kết quả spike (Linux, Ubuntu GNOME Wayland, polkit 127, 2026-11-11)
+
+- Truyền `--detail` vào pkcheck bị từ chối với lỗi "Only trusted callers (e.g. uid 0 or an action owner) can … pass details", trừ khi action có annotation `org.freedesktop.policykit.owner` = `unix-user:<user>`. Có annotation thì `$(message)` hiện đúng nội dung lệnh trong hộp thoại.
+  ⇒ `install-polkit` ghi owner là user đã chạy `sudo` (`SUDO_USER`).
+- Mã thoát quan sát được:
+  - `0`: xác thực đúng;
+  - `3`: bấm Cancel ("Authentication request was dismissed", detail `polkit.dismissed=true`);
+  - `2`: kiểm tra không cho tương tác ("requires authentication").
+  - Mã `1` chưa gặp.
+- Không có rule polkit nào cấp quyền sẵn, cũng không có quyền tạm thời nào được giữ lại: mỗi lần `auth_self` đều hỏi lại.
+- pkcheck chạy từ `systemd-run --user` (giống daemon) vẫn hiện hộp thoại trong phiên đồ họa và xác thực được.
+  ⇒ Giữ systemd user service. Lúc cài service, chạy thêm `systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XAUTHORITY` để `Available()` nhận ra phiên đồ họa.
+
+### 4.7 Kiểm tra tay trên Linux (Ubuntu GNOME Wayland, 2026-11-11, bản 4845019)
+
+- `agentssh install-service` chuyển unit sang `graphical-session.target`. Sau khi khởi động lại, `doctor` báo "approvals use OS authentication".
+- Yêu cầu #90 (`rm /tmp/agentssh-polkit-test` trên VMT_DWH): hộp polkit hiện đúng `[DESTRUCTIVE] approve #90 on VMT_DWH: …`. Người dùng nhập mật khẩu, lệnh chạy, audit ghi `auth=os`.
+- Yêu cầu #96: bấm Cancel trong hộp polkit thì CLI báo "not confirmed", người dùng chọn `n`, lệnh không chạy (file vẫn còn). Agent nhận exit 101, audit ghi `denied`.
+- Hook agentssh trong Claude Code đã chặn lệnh `systemctl` của chính agent khi lệnh đó nhắm vào service agentssh: lớp mềm mới hoạt động.
+- Phát hiện: `sudo agentssh install-polkit` thất bại khi binary nằm ở `~/.local/bin`, vì `secure_path` của sudo không tìm ở đó. README đổi sang `sudo "$(command -v agentssh)" install-polkit`.
+- Chưa kiểm tra tay: macOS (Touch ID) và Windows (CredUI). Hai nền tảng này mặc định dùng mã cho tới khi được kiểm tra.
+
 ## 5. Bảo mật web UI
 
 - **Địa chỉ:** lắng nghe trên `127.0.0.1:0` (cổng ngẫu nhiên). Cổng cố định chỉnh được bằng `agentssh daemon --ui-port`.

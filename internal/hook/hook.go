@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/ASromancer/agentssh/internal/paths"
@@ -96,9 +97,25 @@ func Claude(in io.Reader, out io.Writer, protected []string, explain Explainer) 
 
 var (
 	directSSH  = map[string]bool{"ssh": true, "scp": true, "sftp": true, "mosh": true, "slogin": true}
-	humanOnly  = map[string]bool{"approve": true, "key": true, "reload": true, "host": true, "init": true, "install-hooks": true, "unlock": true}
+	humanOnly  = map[string]bool{"approve": true, "key": true, "reload": true, "host": true, "init": true, "install-hooks": true, "unlock": true, "daemon": true, "install-service": true}
 	readOnlyUs = map[string]bool{"hosts": true, "out": true, "explain": true, "help": true, "version": true}
+	// A restarted daemon picks its auth mode again, so stopping it is human only.
+	stopTools = map[string]bool{"systemctl": true, "pkill": true, "kill": true, "killall": true, "launchctl": true}
+	// Verbs that change the environment or definition user services start
+	// with (systemctl only with --user).
+	serviceVerbs = map[string]map[string]bool{
+		"systemctl": {"set-environment": true, "unset-environment": true, "import-environment": true, "daemon-reload": true, "edit": true, "revert": true},
+		"launchctl": {"setenv": true, "unsetenv": true, "kickstart": true, "bootout": true, "unload": true, "load": true},
+	}
 )
+
+// changesServices reports whether argv changes how user services start.
+func changesServices(name string, args []string) bool {
+	if name == "systemctl" && !slices.Contains(args, "--user") {
+		return false
+	}
+	return slices.ContainsFunc(args, func(a string) bool { return serviceVerbs[name][a] })
+}
 
 // Shell tools of each agent: Claude/Codex Bash, Codex shell/exec_command,
 // Gemini run_shell_command, Antigravity run_command.
@@ -140,6 +157,19 @@ func Decide(tool string, input map[string]any, cwd string, protected []string, e
 		return "deny", "agentssh config and state can only be changed by the user"
 	}
 	return "", ""
+}
+
+// ServicePaths are the files that decide how the agentssh service starts
+// (unit, drop-ins, session environment, launch agent); the hook protects
+// them like agentssh's own config.
+func ServicePaths(home string) []string {
+	user := filepath.Join(home, ".config", "systemd", "user")
+	return []string{
+		filepath.Join(user, "agentssh.service"),
+		filepath.Join(user, "agentssh.service.d"),
+		filepath.Join(home, ".config", "environment.d"),
+		filepath.Join(home, "Library", "LaunchAgents", "dev.agentssh.plist"),
+	}
 }
 
 func inside(p, cwd string, dirs []string) bool {
@@ -195,6 +225,10 @@ func runArgs(args []string) (host, cmd string, ok bool) {
 }
 
 func bash(cmd, cwd string, protected []string, explain Explainer) (string, string) {
+	// Restarting the daemon with another environment can switch it to codes.
+	if l := strings.ToLower(cmd); strings.Contains(l, "agentssh_os_auth") || strings.Contains(l, "agentssh.service") {
+		return "deny", "changing how agentssh authenticates is for the human user only"
+	}
 	calls, writes, err := policy.Calls(cmd)
 	if err != nil {
 		return "", ""
@@ -207,6 +241,11 @@ func bash(cmd, cwd string, protected []string, explain Explainer) (string, strin
 		switch {
 		case directSSH[name]:
 			return "deny", fmt.Sprintf("do not call %s directly; use 'agentssh run <host> \"<cmd>\"' (see 'agentssh hosts')", name)
+		// Raw text, not argv: catches kill $(pgrep agentssh).
+		case stopTools[name] && strings.Contains(strings.ToLower(cmd), "agentssh"):
+			return "deny", "stopping or restarting agentssh is for the human user only"
+		case changesServices(name, argv[1:]):
+			return "deny", "changing how user services start is for the human user only"
 		case name == "rsync":
 			for _, a := range argv[1:] {
 				if remoteArg(a) {
@@ -267,7 +306,8 @@ func mentions(cmd string, dirs []string) bool {
 	norm := func(s string) string { return strings.ToLower(strings.ReplaceAll(s, `\`, "/")) }
 	c := norm(cmd)
 	for _, d := range append([]string{".config/agentssh", ".local/state/agentssh", "appdata/roaming/agentssh",
-		"appdata/local/agentssh", "$appdata/agentssh", "$localappdata/agentssh"}, dirs...) {
+		"appdata/local/agentssh", "$appdata/agentssh", "$localappdata/agentssh",
+		".config/systemd/user/agentssh.service", ".config/environment.d", "launchagents/dev.agentssh.plist"}, dirs...) {
 		if strings.Contains(c, norm(d)) {
 			return true
 		}

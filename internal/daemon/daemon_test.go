@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/binary"
@@ -23,6 +24,8 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/ASromancer/agentssh/internal/approval"
+	"github.com/ASromancer/agentssh/internal/hosts"
+	"github.com/ASromancer/agentssh/internal/humanok"
 	"github.com/ASromancer/agentssh/internal/paths"
 	"github.com/ASromancer/agentssh/internal/sshconn"
 	"github.com/ASromancer/agentssh/internal/vault"
@@ -131,6 +134,13 @@ func (h *harness) notify(_, body string) error {
 	return nil
 }
 
+// useHuman swaps the confirmer and decides the mode again, as a daemon
+// start would.
+func (h *harness) useHuman(c humanok.Confirmer) {
+	h.d.human = c
+	h.d.pickAuth()
+}
+
 func (h *harness) lastCode() string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -210,6 +220,7 @@ key = "k1"
 		t.Fatal(err)
 	}
 	h.d = d
+	h.useHuman(&humanok.Fake{Err: humanok.ErrUnavailable}) // stay in code mode even where polkit exists
 	ln, err := net.Listen("unix", paths.Socket())
 	if err != nil {
 		t.Fatal(err)
@@ -380,5 +391,314 @@ func TestDaemonEndToEnd(t *testing.T) {
 	b, _ := os.ReadFile(paths.Audit())
 	if !bytes.Contains(b, []byte(`"decision":"approved"`)) || bytes.Contains(b, []byte("payload")) {
 		t.Fatalf("audit:\n%s", b)
+	}
+}
+
+func TestOSAuth(t *testing.T) {
+	h := setup(t)
+	fake := &humanok.Fake{Allow: false}
+	h.useHuman(fake)
+	if err := h.call("Unlock", &UnlockArgs{Pass: "pw"}, &Empty{}); err != nil {
+		t.Fatal(err)
+	}
+	var st StatusReply
+	h.call("Status", &Empty{}, &st)
+	if st.Auth != "os" {
+		t.Fatalf("status auth %q", st.Auth)
+	}
+
+	victim := h.remote + "/osauth"
+	os.WriteFile(victim, []byte("x"), 0o600)
+	rm := ExecArgs{Cmd: "rm " + victim}
+	r := h.exec(rm)
+	if r.Pending == 0 {
+		t.Fatalf("expected pending: %+v", r)
+	}
+	h.mu.Lock()
+	note := h.notes[len(h.notes)-1]
+	h.mu.Unlock()
+	if strings.Contains(note, "code:") {
+		t.Fatal("notification carries a code in OS-auth mode")
+	}
+	// The OS dialog is refused: still pending, nothing ran.
+	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Choice: "y"}, &Empty{}); err == nil {
+		t.Fatal("approved without OS authentication")
+	}
+	if msgs := fake.Msgs(); len(msgs) != 1 || msgs[0] != fmt.Sprintf("[DESTRUCTIVE] approve #%d on web1: rm %s", r.Pending, victim) {
+		t.Fatalf("dialog text %q", msgs)
+	}
+	// A deny-with-message reaches the agent, so it needs proof too.
+	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Choice: "m", Note: "use logrotate"}, &Empty{}); err == nil {
+		t.Fatal("message decision without OS authentication")
+	}
+	if m := fake.Msgs()[1]; m != fmt.Sprintf(`[DESTRUCTIVE] deny #%d on web1 with a message to the agent: rm %s — message: "use logrotate"`, r.Pending, victim) {
+		t.Fatalf("m dialog text %q", m)
+	}
+	if p := h.d.q.Pending(); len(p) != 1 {
+		t.Fatalf("request not pending after refused m: %v", p)
+	}
+	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Choice: "q"}, &Empty{}); err == nil {
+		t.Fatal("unknown choice accepted")
+	}
+	fake.Allow = true
+	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Choice: "y"}, &Empty{}); err != nil {
+		t.Fatal(err)
+	}
+	rm.ApprovalID = r.Pending
+	if r := h.exec(rm); r.Exit != 0 || r.Code != 0 {
+		t.Fatalf("run after OS approval: %+v", r)
+	}
+
+	// Denial needs no authentication.
+	before := len(fake.Msgs())
+	never := ExecArgs{Cmd: "rm -rf /tmp/never"}
+	r = h.exec(never)
+	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Choice: "n"}, &Empty{}); err != nil || len(fake.Msgs()) != before {
+		t.Fatalf("deny: %v, dialogs %d", err, len(fake.Msgs())-before)
+	}
+	never.ApprovalID = r.Pending
+	if r := h.exec(never); r.Code != CodeDenied {
+		t.Fatalf("denied run: %+v", r)
+	}
+
+	// Admin without a code.
+	var br BeginReply
+	h.call("Begin", &BeginArgs{Op: "key-gen", Name: "os1"}, &br)
+	var ar AdminReply
+	if !br.OSAuth {
+		t.Fatal("Begin did not report OS auth")
+	}
+	if err := h.call("Admin", &AdminArgs{Ticket: br.Ticket, Op: "key-gen", Name: "os1"}, &ar); err != nil || !strings.HasPrefix(ar.Out, "ssh-ed25519 ") {
+		t.Fatalf("admin: %v %q", err, ar.Out)
+	}
+	if last := fake.Msgs()[len(fake.Msgs())-1]; !strings.Contains(last, "key-gen os1") {
+		t.Fatalf("admin dialog %q", last)
+	}
+	// host-set shows every field that takes effect.
+	host := &hosts.Host{Host: "10.0.0.9", User: "deploy", Key: "k1", Agent: true, Profile: "full",
+		Allow: []string{"systemctl restart *"}, Deny: []string{"psql *"}}
+	h.call("Begin", &BeginArgs{Op: "host-set", Name: "web2"}, &br)
+	if err := h.call("Admin", &AdminArgs{Ticket: br.Ticket, Op: "host-set", Name: "web2", Host: host}, &ar); err != nil {
+		t.Fatal(err)
+	}
+	want := `save host web2 (deploy@10.0.0.9:22, profile full, agent access true, key=k1, allow=["systemctl restart *"], deny=["psql *"])`
+	if last := fake.Msgs()[len(fake.Msgs())-1]; last != want {
+		t.Fatalf("host-set dialog %q", last)
+	}
+
+	b, _ := os.ReadFile(paths.Audit())
+	var runOS, denyNone bool
+	for _, l := range bytes.Split(b, []byte("\n")) {
+		runOS = runOS || bytes.Contains(l, []byte(`"kind":"run"`)) && bytes.Contains(l, []byte(`"auth":"os"`))
+		denyNone = denyNone || bytes.Contains(l, []byte(`rm -rf /tmp/never`)) && bytes.Contains(l, []byte(`"auth":"none"`))
+	}
+	if !runOS || !denyNone || !bytes.Contains(b, []byte(`"kind":"admin"`)) {
+		t.Fatalf("audit lacks run auth=os / deny auth=none:\n%s", b)
+	}
+}
+
+func TestDialogText(t *testing.T) {
+	const blank = "confirm an agentssh action"
+	pad := "[DESTRUCTIVE] approve on h: ls" + strings.Repeat(" ", 1500) + "; rm -rf ~"
+	got := dialogText(pad)
+	if got != "[DESTRUCTIVE] approve on h: ls ; rm -rf ~" {
+		t.Errorf("padding attack: %q", got)
+	}
+	long := "[DESTRUCTIVE] approve on h: " + strings.Repeat("x", 2000) + "; rm -rf ~"
+	got = dialogText(long)
+	if !strings.HasSuffix(got, "; rm -rf ~") || !strings.HasPrefix(got, "[DESTRUCTIVE]") || !strings.Contains(got, " bytes hidden ") || len(got) > 1000 {
+		t.Errorf("long: %q", got)
+	}
+	m := "a" + strings.Repeat("é", 600) // 1201 bytes
+	want := "a" + strings.Repeat("é", 249) + " … 302 bytes hidden … " + strings.Repeat("é", 200)
+	if got := dialogText(m); got != want {
+		t.Errorf("multibyte: %q", got)
+	}
+	for _, c := range []struct{ in, want string }{
+		{"hello", "hello"},
+		{"", blank},
+		{" \t\n\r", blank},
+		{"\x00\x00", blank},
+		{"a\x00b", "ab"},
+		{"a\xffb", "a\uFFFDb"},
+		{"a\nb\r\nc\td", "a b c d"},
+		{"ls\u202e txt.exe", "ls txt.exe"},
+		{"r\u200bm", "rm"},
+		{"a\u0085b\x1bc", "a b c"},
+		{"r\u061cm", "rm"},
+		{"r\u00adm", "rm"},
+		{"a\u3164b\u2800c\u2066d", "abcd"},
+	} {
+		if got := dialogText(c.in); got != c.want {
+			t.Errorf("dialogText(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// blocker is a confirmer whose dialog stays open until release is closed.
+type blocker struct{ started, release chan struct{} }
+
+func (b *blocker) Available() error { return nil }
+func (b *blocker) Confirm(context.Context, string) error {
+	b.started <- struct{}{}
+	<-b.release
+	return nil
+}
+
+func TestConfirmOneAtATime(t *testing.T) {
+	b := &blocker{started: make(chan struct{}), release: make(chan struct{})}
+	d := &Daemon{human: b}
+	first := make(chan error)
+	go func() { first <- d.confirm("first") }()
+	<-b.started
+	if err := d.confirm("second"); err == nil || err.Error() != "another confirmation is already in progress; finish it first" {
+		t.Fatalf("second dialog while the first is open: %v", err)
+	}
+	close(b.release)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	go func() { <-b.started }()
+	if err := d.confirm("third"); err != nil {
+		t.Fatalf("dialog after the first closed: %v", err)
+	}
+}
+
+func TestOSAuthBreaksDecide(t *testing.T) {
+	h := setup(t)
+	fake := &humanok.Fake{ConfirmErr: fmt.Errorf("%w: no polkit authentication agent", humanok.ErrUnavailable)}
+	h.useHuman(fake)
+	h.call("Unlock", &UnlockArgs{Pass: "pw"}, &Empty{})
+	victim := h.remote + "/broken"
+	os.WriteFile(victim, []byte("x"), 0o600)
+	r := h.exec(ExecArgs{Cmd: "rm " + victim})
+	if r.Pending == 0 {
+		t.Fatalf("expected pending: %+v", r)
+	}
+	err := h.call("Decide", &DecideArgs{ID: r.Pending, Choice: "y"}, &Empty{})
+	if err == nil || !strings.Contains(err.Error(), "no polkit authentication agent") ||
+		!strings.Contains(err.Error(), "agentssh doctor") || !strings.Contains(err.Error(), "AGENTSSH_OS_AUTH=0") {
+		t.Fatalf("decide: %v", err)
+	}
+	var st StatusReply
+	h.call("Status", &Empty{}, &st)
+	if st.Auth != "os" {
+		t.Fatalf("mode changed after a broken dialog: %+v", st)
+	}
+	if p := h.d.q.Pending(); len(p) != 1 || p[0].Code != "" {
+		t.Fatalf("request not pending, or a code appeared: %+v", p)
+	}
+	h.mu.Lock()
+	for _, n := range h.notes {
+		if strings.Contains(n, "code:") {
+			t.Fatalf("a code was sent: %q", n)
+		}
+	}
+	h.mu.Unlock()
+	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Choice: "n"}, &Empty{}); err != nil {
+		t.Fatalf("deny after a broken dialog: %v", err)
+	}
+}
+
+func TestOSAuthBreaksAdmin(t *testing.T) {
+	h := setup(t)
+	h.useHuman(&humanok.Fake{ConfirmErr: humanok.ErrUnavailable})
+	h.call("Unlock", &UnlockArgs{Pass: "pw"}, &Empty{})
+	var br BeginReply
+	var ar AdminReply
+	h.call("Begin", &BeginArgs{Op: "key-gen", Name: "k9"}, &br)
+	if !br.OSAuth || br.Code != "" {
+		t.Fatalf("expected OS mode: %+v", br)
+	}
+	err := h.call("Admin", &AdminArgs{Ticket: br.Ticket, Op: "key-gen", Name: "k9"}, &ar)
+	if err == nil || !strings.Contains(err.Error(), "AGENTSSH_OS_AUTH=0") {
+		t.Fatalf("admin: %v", err)
+	}
+	h.call("Begin", &BeginArgs{Op: "key-gen", Name: "k9"}, &br)
+	if !br.OSAuth || br.Code != "" {
+		t.Fatalf("left OS mode after a broken dialog: %+v", br)
+	}
+}
+
+// The mode is decided at start and on an approved reload only: whatever
+// an agent does to the session afterwards cannot switch it.
+func TestAuthModeDecidedOnce(t *testing.T) {
+	h := setup(t)
+	fake := &humanok.Fake{Allow: true}
+	h.useHuman(fake)
+	fake.Err = humanok.ErrUnavailable // e.g. the display socket was renamed
+	var st StatusReply
+	if h.call("Status", &Empty{}, &st); st.Auth != "os" || !h.d.osAuth() {
+		t.Fatalf("OS mode lost after start: %+v", st)
+	}
+
+	h.useHuman(&humanok.Fake{Err: fmt.Errorf("%w: polkit action not installed", humanok.ErrUnavailable)})
+	if h.call("Status", &Empty{}, &st); st.Auth != "code" || !strings.Contains(st.AuthNote, "polkit action not installed") {
+		t.Fatalf("status %+v", st)
+	}
+	h.d.human.(*humanok.Fake).Err = nil // the human fixed polkit
+	if h.d.osAuth() {
+		t.Fatal("mode changed without a reload")
+	}
+	h.call("Unlock", &UnlockArgs{Pass: "pw"}, &Empty{})
+	var br BeginReply
+	var ar AdminReply
+	h.call("Begin", &BeginArgs{Op: "reload"}, &br)
+	if err := h.call("Admin", &AdminArgs{Ticket: br.Ticket, Op: "reload", Code: h.lastCode()}, &ar); err != nil {
+		t.Fatal(err)
+	}
+	if h.call("Status", &Empty{}, &st); st.Auth != "os" || !strings.Contains(ar.Out, "OS authentication") {
+		t.Fatalf("approved reload did not pick OS mode: %+v %q", st, ar.Out)
+	}
+}
+
+func TestOSAuthOff(t *testing.T) {
+	for _, c := range []struct {
+		goos, env string
+		on        bool
+	}{
+		{"linux", "", true}, {"linux", "1", true}, {"linux", "0", false},
+		{"darwin", "", false}, {"darwin", "1", true}, {"darwin", "0", false},
+		{"windows", "", false}, {"windows", "1", true}, {"windows", "yes", false},
+	} {
+		if why := osAuthOff(c.goos, c.env); (why == "") != c.on {
+			t.Errorf("%s AGENTSSH_OS_AUTH=%q: %q", c.goos, c.env, why)
+		}
+	}
+	if err := authOff(osAuthOff("darwin", "")).Available(); !errors.Is(err, humanok.ErrUnavailable) ||
+		!strings.Contains(err.Error(), "set AGENTSSH_OS_AUTH=1") {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestDialogTimeoutKeepsOSMode(t *testing.T) {
+	h := setup(t)
+	h.useHuman(&humanok.Fake{ConfirmErr: fmt.Errorf("%w: timed out", humanok.ErrDenied)})
+	if err := h.d.confirm("x"); !errors.Is(err, humanok.ErrDenied) {
+		t.Fatalf("got %v", err)
+	}
+	var st StatusReply
+	h.call("Status", &Empty{}, &st)
+	if st.Auth != "os" {
+		t.Fatalf("status %+v", st)
+	}
+}
+
+// An approved reload can switch codes to OS authentication, never back.
+func TestReloadNeverDowngrades(t *testing.T) {
+	h := setup(t)
+	fake := &humanok.Fake{Allow: true}
+	h.useHuman(fake)
+	fake.Err = fmt.Errorf("%w: Wayland display gone", humanok.ErrUnavailable)
+	h.call("Unlock", &UnlockArgs{Pass: "pw"}, &Empty{})
+	var br BeginReply
+	var ar AdminReply
+	h.call("Begin", &BeginArgs{Op: "reload"}, &br)
+	if err := h.call("Admin", &AdminArgs{Ticket: br.Ticket, Op: "reload"}, &ar); err != nil {
+		t.Fatal(err)
+	}
+	var st StatusReply
+	if h.call("Status", &Empty{}, &st); st.Auth != "os" || !strings.Contains(ar.Out, "Wayland display gone") {
+		t.Fatalf("reload downgraded or hid the reason: %+v %q", st, ar.Out)
 	}
 }

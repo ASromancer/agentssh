@@ -32,7 +32,16 @@ func (s *Service) Unlock(a *UnlockArgs, _ *Empty) error {
 		return err
 	}
 	var key *[32]byte
+	auth := "passphrase"
 	if salt == nil {
+		auth = "none"
+		if s.d.osAuth() {
+			auth = "os"
+			if err := s.d.confirm("unlock the agentssh vault"); err != nil {
+				s.d.log.Write(audit.Entry{Kind: "admin", Cmd: "unlock", Auth: auth, Decision: "denied", Note: err.Error()})
+				return err
+			}
+		}
 		if key, err = vault.KeyringGet(); err != nil {
 			return fmt.Errorf("keyring: %w", err)
 		}
@@ -40,7 +49,7 @@ func (s *Service) Unlock(a *UnlockArgs, _ *Empty) error {
 		key = vault.DeriveKey([]byte(a.Pass), salt)
 	}
 	err = s.d.unlock(key, salt)
-	s.d.log.Write(audit.Entry{Kind: "admin", Cmd: "unlock", Decision: map[bool]string{true: "allow", false: "denied"}[err == nil]})
+	s.d.log.Write(audit.Entry{Kind: "admin", Cmd: "unlock", Auth: auth, Decision: map[bool]string{true: "allow", false: "denied"}[err == nil]})
 	return err
 }
 
@@ -66,13 +75,24 @@ func (s *Service) Begin(a *BeginArgs, r *BeginReply) error {
 		data = key
 	}
 	r.Ticket, r.Code = s.d.q.Ticket(a.Op+" "+a.Name, detail, data)
+	r.OSAuth = s.d.osAuth()
 	return nil
 }
 
 func (s *Service) Admin(a *AdminArgs, r *AdminReply) error {
 	d := s.d
-	data, err := d.q.Check(a.Ticket, a.Op+" "+a.Name, a.Code)
-	e := audit.Entry{Kind: "admin", Cmd: strings.TrimSpace(a.Op + " " + a.Name)}
+	op := a.Op + " " + a.Name
+	e := audit.Entry{Kind: "admin", Cmd: strings.TrimSpace(op), Auth: "code"}
+	var data any
+	var err error
+	if d.osAuth() {
+		e.Auth = "os"
+		if data, err = d.q.Take(a.Ticket, op); err == nil {
+			err = d.confirm(d.adminMessage(a, data))
+		}
+	} else {
+		data, err = d.q.Check(a.Ticket, op, a.Code)
+	}
 	ok := err == nil
 	e.CodeOK = &ok
 	if err != nil {
@@ -90,11 +110,36 @@ func (s *Service) Admin(a *AdminArgs, r *AdminReply) error {
 	return nil
 }
 
+// adminMessage is the OS dialog text for an admin operation. It shows
+// every field that takes effect.
+func (d *Daemon) adminMessage(a *AdminArgs, data any) string {
+	switch a.Op {
+	case "trust":
+		if k, ok := data.(ssh.PublicKey); ok {
+			return fmt.Sprintf("trust host key %s for %s", ssh.FingerprintSHA256(k), a.Name)
+		}
+	case "host-set":
+		if h := a.Host; h != nil {
+			key := h.Key
+			d.mu.Lock()
+			if d.data != nil && d.data.Passwords[key] != nil {
+				key += " (password)"
+			}
+			d.mu.Unlock()
+			return fmt.Sprintf("save host %s (%s@%s, profile %s, agent access %v, key=%s, allow=%q, deny=%q)",
+				a.Name, h.User, h.Addr(), h.EffectiveProfile(), h.Agent, key, h.Allow, h.Deny)
+		}
+	}
+	return strings.TrimSpace("agentssh " + a.Op + " " + a.Name)
+}
+
 func (d *Daemon) admin(a *AdminArgs, data any, r *AdminReply) error {
+	var authNow error
 	if a.Op == "reload" {
 		if err := d.loadConfig(); err != nil {
 			return err
 		}
+		authNow = d.reloadAuth()
 	}
 	if a.Op == "trust" {
 		cfg, _, _, _ := d.snapshot()
@@ -120,7 +165,12 @@ func (d *Daemon) admin(a *AdminArgs, data any, r *AdminReply) error {
 	case "reload":
 		d.data.ConfigHash = ConfigHash()
 		d.userOnly = false
-		r.Out = fmt.Sprintf("reloaded %d hosts", len(d.cfg.Hosts))
+		r.Out = fmt.Sprintf("reloaded %d hosts; approvals use OS authentication", len(d.cfg.Hosts))
+		if err := d.authProblem(); err != nil {
+			r.Out = fmt.Sprintf("reloaded %d hosts; approvals use codes (%v)", len(d.cfg.Hosts), err)
+		} else if authNow != nil {
+			r.Out += fmt.Sprintf(" (the dialog cannot be shown right now: %v; run 'agentssh doctor')", authNow)
+		}
 	case "host-set", "host-rm":
 		if d.userOnly || ConfigHash() != d.data.ConfigHash {
 			return errors.New("hosts.toml or rules.toml changed on disk; review the change and run 'agentssh reload' first")

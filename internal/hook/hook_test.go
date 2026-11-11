@@ -30,7 +30,7 @@ func run(t *testing.T, tool string, input map[string]any) string {
 	t.Helper()
 	in, _ := json.Marshal(map[string]any{"tool_name": tool, "tool_input": input, "cwd": home, "hook_event_name": "PreToolUse"})
 	var out bytes.Buffer
-	if err := Claude(bytes.NewReader(in), &out, []string{filepath.Join(home, ".config", "agentssh"), filepath.Join(home, ".local", "state", "agentssh")}, fakeExplain); err != nil {
+	if err := Claude(bytes.NewReader(in), &out, append([]string{filepath.Join(home, ".config", "agentssh"), filepath.Join(home, ".local", "state", "agentssh")}, ServicePaths(home)...), fakeExplain); err != nil {
 		t.Fatal(err)
 	}
 	if out.Len() == 0 {
@@ -61,6 +61,7 @@ func TestBash(t *testing.T) {
 		{`agentssh approve`, "deny"},
 		{`agentssh key export web1`, "deny"},
 		{`agentssh reload`, "deny"},
+		{`agentssh install-service`, "deny"},
 		{`cd /tmp && agentssh approve`, "deny"},
 		{`ssh web1 uptime`, "deny"},
 		{`/usr/bin/ssh web1`, "deny"},
@@ -77,6 +78,38 @@ func TestBash(t *testing.T) {
 		{`SSH.exe web1`, "deny"},
 		{`rsync -av C:/src/ D:/backup/`, ""},
 		{`cat $APPDATA/agentssh/hosts.toml`, "ask"},
+		// Restarting the daemon could switch it to codes: human only.
+		{`agentssh daemon --detach`, "deny"},
+		{`AGENTSSH_OS_AUTH=0 agentssh daemon`, "deny"},
+		{`systemctl --user restart agentssh.service`, "deny"},
+		{`systemctl --user set-environment AGENTSSH_OS_AUTH=0`, "deny"},
+		{`$env:agentssh_os_auth = "0"`, "deny"},
+		{`systemctl --user restart agentssh`, "deny"},
+		{`pkill agentssh`, "deny"},
+		{`pkill -f "agentssh daemon"`, "deny"},
+		{`killall agentssh`, "deny"},
+		{`kill 1234`, ""},
+		{`/usr/bin/pkill agentssh`, "deny"},
+		{`kill -9 $(pgrep agentssh)`, "deny"},
+		{`kill $(pidof AgentSSH)`, "deny"},
+		{`launchctl kickstart -k gui/501/dev.agentssh`, "deny"},
+		// Changing how user services start: human only, agentssh named or not.
+		{`systemctl --user set-environment LD_PRELOAD=/tmp/x.so`, "deny"},
+		{`systemctl --user unset-environment DISPLAY`, "deny"},
+		{`systemctl --user import-environment`, "deny"},
+		{`systemctl --user daemon-reload`, "deny"},
+		{`systemctl --user edit foo`, "deny"},
+		{`systemctl --user revert foo`, "deny"},
+		{`launchctl setenv DYLD_INSERT_LIBRARIES /tmp/x`, "deny"},
+		{`launchctl unsetenv PATH`, "deny"},
+		{`launchctl kickstart -k gui/501/com.example`, "deny"},
+		{`launchctl bootout gui/501/com.example`, "deny"},
+		{`launchctl unload ~/Library/LaunchAgents/x.plist`, "deny"},
+		{`launchctl load ~/Library/LaunchAgents/x.plist`, "deny"},
+		{`systemctl status nginx`, ""},
+		{`systemctl --user status pipewire`, ""},
+		{`launchctl list`, ""},
+		{`echo X=1 >> ~/.config/environment.d/x.conf`, "ask"},
 	} {
 		if got := run(t, "Bash", map[string]any{"command": tc.cmd}); got != tc.want {
 			t.Errorf("%s: got %q want %q", tc.cmd, got, tc.want)
@@ -90,6 +123,14 @@ func TestEditWrite(t *testing.T) {
 	}
 	if got := run(t, "Edit", map[string]any{"file_path": filepath.Join(home, ".local", "state", "agentssh", "audit.jsonl")}); got != "deny" {
 		t.Errorf("edit audit: %q", got)
+	}
+	for _, p := range []string{
+		filepath.Join(home, ".config", "systemd", "user", "agentssh.service.d", "override.conf"),
+		filepath.Join(home, ".config", "environment.d", "50-x.conf"),
+	} {
+		if got := run(t, "Write", map[string]any{"file_path": p}); got != "deny" {
+			t.Errorf("write %s: %q", p, got)
+		}
 	}
 	if got := run(t, "Edit", map[string]any{"file_path": filepath.Join(home, "work", "main.go")}); got != "" {
 		t.Errorf("normal edit: %q", got)

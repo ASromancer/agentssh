@@ -89,6 +89,8 @@ type JobReply struct {
 type StatusReply struct {
 	Locked, UserOnly, Passphrase, VaultMissing bool
 	Pending                                    int
+	Auth                                       string // "os" or "code"
+	AuthNote                                   string // why OS authentication is unavailable
 }
 
 type UnlockArgs struct{ Pass string }
@@ -103,7 +105,8 @@ type BeginArgs struct{ Op, Name string }
 type BeginReply struct {
 	Ticket int
 	Info   string // e.g. host key fingerprint to compare
-	Code   string // only when the desktop notification failed
+	Code   string // only when the desktop notification failed (code mode)
+	OSAuth bool   // no code: Admin triggers an OS authentication dialog
 }
 
 type AdminArgs struct {

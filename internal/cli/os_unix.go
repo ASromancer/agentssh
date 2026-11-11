@@ -41,6 +41,14 @@ func startDetached(logPath string) error {
 	return c.Process.Release()
 }
 
+// systemdUnit starts the daemon with the graphical session: the auth mode
+// is fixed at start, and OS authentication needs the session's display.
+func systemdUnit(exe string) string {
+	return fmt.Sprintf("[Unit]\nDescription=agentssh daemon\nAfter=graphical-session.target\nPartOf=graphical-session.target\n\n"+
+		"[Service]\nExecStart=%s daemon\nRestart=on-failure\n\n"+
+		"[Install]\nWantedBy=graphical-session.target\n", exe)
+}
+
 func installService() error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -50,8 +58,9 @@ func installService() error {
 	switch runtime.GOOS {
 	case "linux":
 		p := filepath.Join(home, ".config", "systemd", "user", "agentssh.service")
-		unit := fmt.Sprintf("[Unit]\nDescription=agentssh daemon\n\n[Service]\nExecStart=%s daemon\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n", exe)
-		if err := writeFile(p, unit); err != nil {
+		// Drop the link of an older unit (WantedBy=default.target).
+		_ = exec.Command("systemctl", "--user", "disable", "agentssh.service").Run()
+		if err := writeFile(p, systemdUnit(exe)); err != nil {
 			return err
 		}
 		if out, err := exec.Command("systemctl", "--user", "daemon-reload").CombinedOutput(); err != nil {
@@ -60,6 +69,9 @@ func installService() error {
 		if out, err := exec.Command("systemctl", "--user", "enable", "--now", "agentssh.service").CombinedOutput(); err != nil {
 			return fmt.Errorf("%v: %s", err, out)
 		}
+		// Let the daemon see the graphical session (humanok checks DISPLAY/WAYLAND_DISPLAY).
+		_ = exec.Command("systemctl", "--user", "import-environment", "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY").Run()
+		_ = exec.Command("systemctl", "--user", "restart", "agentssh.service").Run()
 	case "darwin":
 		p := filepath.Join(home, "Library", "LaunchAgents", "dev.agentssh.plist")
 		plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>

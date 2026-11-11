@@ -6,13 +6,17 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"math"
+	"math/big"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ASromancer/agentssh/internal/humanok"
 	"github.com/ASromancer/agentssh/internal/policy"
 )
 
@@ -39,6 +43,7 @@ type Decision struct {
 	Message string // optional note from the human, passed back to the agent
 	CodeOK  bool
 	Sticky  bool
+	Auth    string // code|os|none
 }
 
 const (
@@ -79,12 +84,15 @@ type ticket struct {
 type Queue struct {
 	Notify  func(title, body string) error
 	Timeout time.Duration
+	// UseCodes reports whether approvals use out-of-band codes. When it
+	// returns false, the daemon authenticates the human through the OS and
+	// notifications carry no code. nil means true.
+	UseCodes func() bool
 
-	mu         sync.Mutex
-	pending    map[int]*entry
-	sticky     map[string]time.Time
-	tickets    map[int]*ticket
-	nextTicket int
+	mu      sync.Mutex
+	pending map[int]*entry
+	sticky  map[string]time.Time
+	tickets map[int]*ticket
 }
 
 func NewQueue(notify func(title, body string) error, timeout time.Duration) *Queue {
@@ -93,6 +101,8 @@ func NewQueue(notify func(title, body string) error, timeout time.Duration) *Que
 }
 
 func stickyKey(host, cmd string) string { return host + "\x00" + cmd }
+
+func (q *Queue) codes() bool { return q.UseCodes == nil || q.UseCodes() }
 
 // Sticky reports whether the same command on the same host was approved
 // with "s" in the last 30 minutes.
@@ -107,15 +117,19 @@ func (q *Queue) Sticky(host, cmd string) bool {
 // It returns whether the notification was delivered.
 func (q *Queue) Add(r Request) bool {
 	e := &entry{req: r, code: NewCode(), done: make(chan Decision, 1)}
-	err := q.Notify("agentssh approval #"+fmt.Sprint(r.ID),
-		fmt.Sprintf("%s: %s [%s] code: %s", r.Host, r.Cmd, r.Level, e.code))
-	if err != nil {
+	codes := q.codes()
+	body := fmt.Sprintf("%s: %s [%s] code: %s", r.Host, r.Cmd, r.Level, e.code)
+	if !codes {
+		body = fmt.Sprintf("%s: %s [%s] — open agentssh to approve", r.Host, r.Cmd, r.Level)
+	}
+	err := q.Notify("agentssh approval #"+fmt.Sprint(r.ID), body)
+	if err != nil && codes {
 		e.req.Code = e.code
 	}
 	q.mu.Lock()
 	q.pending[r.ID] = e
 	q.mu.Unlock()
-	time.AfterFunc(q.Timeout, func() { q.finish(r.ID, Decision{Outcome: "timeout"}) })
+	time.AfterFunc(q.Timeout, func() { _ = q.finish(r.ID, Decision{Outcome: "timeout"}) })
 	time.AfterFunc(q.Timeout+time.Minute, func() { // nobody waited for it
 		q.mu.Lock()
 		delete(q.pending, r.ID)
@@ -124,18 +138,21 @@ func (q *Queue) Add(r Request) bool {
 	return err == nil
 }
 
-func (q *Queue) finish(id int, d Decision) {
+// finish records d as the decision for id. It returns false, and changes
+// nothing, when the request is unknown or already decided.
+func (q *Queue) finish(id int, d Decision) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	e, ok := q.pending[id]
 	if !ok || e.decided {
-		return
+		return false
 	}
 	e.decided = true
 	if d.Sticky {
 		q.sticky[stickyKey(e.req.Host, e.req.Cmd)] = time.Now().Add(StickyFor)
 	}
 	e.done <- d
+	return true
 }
 
 // Wait blocks until request id is decided or times out. ok=false means the
@@ -196,13 +213,31 @@ func (q *Queue) Decide(id int, code, choice, msg string) (Decision, error) {
 		left := maxTries - e.tries
 		q.mu.Unlock()
 		if left <= 0 {
-			q.finish(id, Decision{Outcome: "denied", Message: "wrong approval code entered 3 times"})
+			_ = q.finish(id, Decision{Outcome: "denied", Message: "wrong approval code entered 3 times"})
 			return Decision{}, fmt.Errorf("%w: request denied after %d wrong codes", ErrBadCode, maxTries)
 		}
 		return Decision{}, fmt.Errorf("%w: %d tries left", ErrBadCode, left)
 	}
 	q.mu.Unlock()
-	d := Decision{CodeOK: true}
+	return q.Resolve(id, choice, msg, "code")
+}
+
+// Resolve applies a decision whose human proof was already checked by the
+// caller (OS authentication), or that needs none (denials).
+func (q *Queue) Resolve(id int, choice, msg, auth string) (Decision, error) {
+	switch auth {
+	case "code", "os", "none":
+	default:
+		return Decision{}, fmt.Errorf("unknown auth %q", auth)
+	}
+	q.mu.Lock()
+	e, ok := q.pending[id]
+	decided := ok && e.decided
+	q.mu.Unlock()
+	if !ok || decided {
+		return Decision{}, fmt.Errorf("no pending request #%d", id)
+	}
+	d := Decision{CodeOK: auth == "code" || auth == "os", Auth: auth}
 	switch choice {
 	case "y":
 		d.OK, d.Outcome = true, "approved"
@@ -215,29 +250,67 @@ func (q *Queue) Decide(id int, code, choice, msg string) (Decision, error) {
 	default:
 		return Decision{}, fmt.Errorf("unknown choice %q", choice)
 	}
-	q.finish(id, d)
+	if d.OK && !d.CodeOK {
+		return Decision{}, errors.New("approval needs a code or OS authentication")
+	}
+	if !q.finish(id, d) {
+		return Decision{}, fmt.Errorf("request #%d was already decided", id)
+	}
 	return d, nil
 }
 
+// Get returns a pending, undecided request.
+func (q *Queue) Get(id int) (Request, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	e, ok := q.pending[id]
+	if !ok || e.decided {
+		return Request{}, false
+	}
+	return e.req, true
+}
+
 // Ticket starts an admin operation: it sends a code out of band and
-// returns the ticket id. data is handed back by Check (e.g. the host key
+// returns the ticket id, a random positive number so that another caller
+// cannot guess and take the human's ticket. data is handed back by Check (e.g. the host key
 // whose fingerprint the human saw). code is returned only if the
 // notification failed.
 func (q *Queue) Ticket(op, detail string, data any) (id int, code string) {
 	t := &ticket{op: op, code: NewCode(), data: data, expires: time.Now().Add(TicketValid)}
 	q.mu.Lock()
-	q.nextTicket++
-	id = q.nextTicket
+	for id == 0 || q.tickets[id] != nil {
+		n, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt))
+		if err != nil {
+			panic(err)
+		}
+		id = int(n.Int64()) + 1 // 1..MaxInt
+	}
 	q.tickets[id] = t
 	q.mu.Unlock()
 	body := fmt.Sprintf("admin: %s code: %s", op, t.code)
 	if detail != "" {
 		body = fmt.Sprintf("admin: %s (%s) code: %s", op, detail, t.code)
 	}
+	if !q.codes() {
+		return id, ""
+	}
 	if err := q.Notify("agentssh", body); err != nil {
 		return id, t.code
 	}
 	return id, ""
+}
+
+// Take consumes a ticket without a code; the caller authenticates the
+// human through the OS instead.
+func (q *Queue) Take(id int, op string) (any, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	t, ok := q.tickets[id]
+	delete(q.tickets, id)
+	if !ok || t.op != op || time.Now().After(t.expires) {
+		return nil, errors.New("approval ticket expired or invalid; start again")
+	}
+	return t.data, nil
 }
 
 // Check verifies an admin code. A ticket is single-use and bound to op.
@@ -261,27 +334,64 @@ func (q *Queue) Check(id int, op, code string) (any, error) {
 	return t.data, nil
 }
 
-// Desktop sends a desktop notification (notify-send / osascript).
+// Desktop sends a desktop notification (notify-send / osascript /
+// powershell). The helper is run only from a root-owned system path, never
+// found through PATH; without one, Desktop fails and the code is shown in
+// the terminal instead.
 func Desktop(title, body string) error {
-	var cmd *exec.Cmd
+	var cands []string
 	switch runtime.GOOS {
 	case "linux":
-		cmd = exec.Command("notify-send", "-u", "critical", "-a", "agentssh", title, body)
+		cands = []string{"/usr/bin/notify-send", "/bin/notify-send"}
 	case "darwin":
-		q := func(s string) string { return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"` }
-		cmd = exec.Command("osascript", "-e", "display notification "+q(body)+" with title "+q(title))
+		cands = []string{"/usr/bin/osascript"}
 	case "windows":
-		// Title and body go through the environment, never into the script.
-		cmd = exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", windowsToast)
-		cmd.Env = append(os.Environ(), "AGENTSSH_TITLE="+title, "AGENTSSH_BODY="+body)
+		cands = []string{filepath.Join(humanok.SystemDir(), "WindowsPowerShell", "v1.0", "powershell.exe")}
 	default:
 		return errors.New("desktop notifications not supported on " + runtime.GOOS)
 	}
+	bin, err := humanok.TrustedBinary(cands...)
+	if err != nil {
+		return err
+	}
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "linux":
+		cmd = exec.Command(bin, "-u", "critical", "-a", "agentssh", title, body)
+	case "darwin":
+		q := func(s string) string { return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"` }
+		cmd = exec.Command(bin, "-e", "display notification "+q(body)+" with title "+q(title))
+	case "windows":
+		// Title and body go through the environment, never into the script.
+		cmd = exec.Command(bin, "-NoProfile", "-NonInteractive", "-Command", windowsToast)
+	}
+	cmd.Env = append(notifyEnv(os.Environ(), runtime.GOOS), "AGENTSSH_TITLE="+title, "AGENTSSH_BODY="+body)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// notifyEnv keeps only the variables a notifier needs. The daemon's
+// environment is not trusted (an agent can change it and restart the
+// daemon), so LD_PRELOAD, PATH and the like never reach the helper.
+func notifyEnv(environ []string, goos string) []string {
+	keep := []string{"DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "DISPLAY", "WAYLAND_DISPLAY", "HOME", "LANG", "LC_ALL"}
+	if goos == "windows" {
+		keep = append(keep, "SystemRoot", "USERPROFILE", "TEMP", "TMP", "LOCALAPPDATA", "APPDATA")
+	}
+	var out []string
+	for _, kv := range environ {
+		k, _, _ := strings.Cut(kv, "=")
+		for _, w := range keep {
+			if k == w || (goos == "windows" && strings.EqualFold(k, w)) {
+				out = append(out, kv)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // windowsToast shows a toast as Windows PowerShell's own app id, which is

@@ -3,6 +3,7 @@
 package daemon
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -18,12 +19,16 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/ASromancer/agentssh/internal/approval"
 	"github.com/ASromancer/agentssh/internal/audit"
 	"github.com/ASromancer/agentssh/internal/hosts"
+	"github.com/ASromancer/agentssh/internal/humanok"
 	"github.com/ASromancer/agentssh/internal/paths"
 	"github.com/ASromancer/agentssh/internal/policy"
 	"github.com/ASromancer/agentssh/internal/sshconn"
@@ -42,9 +47,12 @@ type Daemon struct {
 	userOnly bool // config on disk differs from the approved hash
 	jobs     map[int]*sshconn.Job
 
-	q    *approval.Queue
-	pool *sshconn.Pool
-	log  *audit.Log
+	q      *approval.Queue
+	human  humanok.Confirmer
+	dialog sync.Mutex            // one OS dialog at a time
+	auth   atomic.Pointer[error] // why approvals use codes; nil error: OS authentication
+	pool   *sshconn.Pool
+	log    *audit.Log
 }
 
 func New(notify func(title, body string) error, approvalTimeout time.Duration) (*Daemon, error) {
@@ -59,11 +67,121 @@ func New(notify func(title, body string) error, approvalTimeout time.Duration) (
 		pool: sshconn.NewPool(paths.KnownHosts()),
 		log:  &audit.Log{Path: paths.Audit()},
 	}
+	d.human = humanok.Default
+	if why := osAuthOff(runtime.GOOS, os.Getenv("AGENTSSH_OS_AUTH")); why != "" {
+		d.human = authOff(why)
+	}
+	d.pickAuth()
+	d.q.UseCodes = func() bool { return !d.osAuth() }
 	if err := d.loadConfig(); err != nil {
 		return nil, err
 	}
 	d.autoUnlock()
 	return d, nil
+}
+
+// osAuthOff returns why OS authentication is off, or "" when it is on.
+// It is on by default only on Linux, the only backend verified on a real
+// machine so far; AGENTSSH_OS_AUTH=1 turns it on, =0 off, everywhere.
+func osAuthOff(goos, env string) string {
+	switch {
+	case env == "0":
+		return "OS authentication is off (AGENTSSH_OS_AUTH=0)"
+	case env == "1", goos == "linux":
+		return ""
+	}
+	return "OS authentication is off on " + goos + " until verified; set AGENTSSH_OS_AUTH=1 to enable"
+}
+
+// authOff is the confirmer when OS authentication is turned off.
+type authOff string
+
+func (a authOff) Available() error                      { return fmt.Errorf("%w: %s", humanok.ErrUnavailable, string(a)) }
+func (a authOff) Confirm(context.Context, string) error { return a.Available() }
+
+// pickAuth decides how the human is authenticated, at start. Nothing an
+// agent does to the session later (renaming the display socket, killing
+// the polkit agent) can switch the daemon to codes.
+func (d *Daemon) pickAuth() {
+	err := d.human.Available()
+	d.auth.Store(&err)
+}
+
+// reloadAuth runs on an approved reload. It may switch codes to OS
+// authentication, never back: in OS mode it only returns why the dialog
+// cannot be shown right now.
+func (d *Daemon) reloadAuth() error {
+	if d.osAuth() {
+		return d.human.Available()
+	}
+	d.pickAuth()
+	return nil
+}
+
+// authProblem returns why approvals use codes, or nil when they use OS
+// authentication.
+func (d *Daemon) authProblem() error { return *d.auth.Load() }
+
+// osAuth reports whether the human is authenticated through the OS.
+func (d *Daemon) osAuth() bool { return d.authProblem() == nil }
+
+const (
+	confirmTimeout = 2 * time.Minute
+	maxDialogBytes = 1000
+	dialogHead     = 500
+	dialogTail     = 400
+)
+
+// dialogText makes any message safe and honest for every OS backend: valid
+// UTF-8, no control or bidi/format characters, whitespace collapsed, never
+// empty. An over-long message keeps its head and tail so that padding
+// cannot hide the end of a command.
+func dialogText(msg string) string {
+	msg = strings.ToValidUTF8(msg, "\uFFFD")
+	msg = strings.Map(func(r rune) rune {
+		switch {
+		case r == 0, unicode.Is(unicode.Cf, r), r == 0x3164, r == 0x2800: // invisible
+			return -1
+		case r < 0x20, r >= 0x7F && r <= 0x9F:
+			return ' '
+		}
+		return r
+	}, msg)
+	msg = strings.Join(strings.Fields(msg), " ")
+	if msg == "" {
+		return "confirm an agentssh action"
+	}
+	if len(msg) > maxDialogBytes {
+		h, t := dialogHead, len(msg)-dialogTail
+		for !utf8.RuneStart(msg[h]) {
+			h--
+		}
+		for !utf8.RuneStart(msg[t]) {
+			t++
+		}
+		msg = fmt.Sprintf("%s … %d bytes hidden … %s", msg[:h], t-h, msg[t:])
+	}
+	return msg
+}
+
+var errBusy = errors.New("another confirmation is already in progress; finish it first")
+
+// confirm shows one OS dialog at a time, so that the human never answers
+// a dialog started by someone else while waiting for their own. If the OS
+// cannot show it, the daemon stays in OS mode: switching to codes is the
+// human's decision, made by restarting the daemon.
+func (d *Daemon) confirm(msg string) error {
+	if !d.dialog.TryLock() {
+		return errBusy
+	}
+	defer d.dialog.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), confirmTimeout)
+	defer cancel()
+	err := d.human.Confirm(ctx, dialogText(msg))
+	if !errors.Is(err, humanok.ErrUnavailable) {
+		return err
+	}
+	return fmt.Errorf("OS authentication failed: %w. Run 'agentssh doctor'; to use approval codes instead, restart the daemon with AGENTSSH_OS_AUTH=0.", err)
 }
 
 func (d *Daemon) loadConfig() error {

@@ -3,14 +3,18 @@
 
 Linux/macOS only. Everything lives in a temp dir (HOME, XDG dirs, sshd), so
 it never touches your keyring, ~/.claude or services. init runs in
-passphrase mode, and notify-send/osascript are replaced by stubs that append
-each notification to a file, where this script reads the approval codes.
+passphrase mode.
 
-usage: go build -o /tmp/agentssh . && python3 scripts/e2e.py /tmp/agentssh
+The binary must be built with -tags e2efake: its notifier appends each
+notification to $AGENTSSH_E2E_NOTES (where this script reads the approval
+codes) and its OS dialog is answered through $AGENTSSH_E2E_HUMANOK. The
+first part runs in code mode (AGENTSSH_OS_AUTH=0), the last part in OS mode.
+
+usage: go build -tags e2efake -o /tmp/agentssh-e2e . && python3 scripts/e2e.py /tmp/agentssh-e2e
 """
 import fcntl, json, os, re, select, shutil, signal, socket, subprocess, sys, tempfile, termios, time
 
-BIN = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else "agentssh")
+BIN = os.path.abspath(sys.argv[1])  # built with -tags e2efake
 SSHD = shutil.which("sshd") or "/usr/sbin/sshd"
 TMP = tempfile.mkdtemp(prefix="agentssh-e2e-")
 HOME = os.path.join(TMP, "home")
@@ -21,15 +25,11 @@ ENV = {k: v for k, v in os.environ.items() if k not in ("DISPLAY", "WAYLAND_DISP
 ENV.update(HOME=HOME, XDG_CONFIG_HOME=f"{HOME}/.config", XDG_STATE_HOME=f"{HOME}/.local/state",
            XDG_RUNTIME_DIR=f"{TMP}/run", AGENTSSH_SOCKET=f"{TMP}/s.sock",
            DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent", TERM="dumb",
-           CLAUDECODE="1")  # agent calls come from Claude Code unless a test says otherwise
+           CLAUDECODE="1",  # agent calls come from Claude Code unless a test says otherwise
+           AGENTSSH_OS_AUTH="0")  # code mode first; the OS-mode part turns it on
 os.makedirs(ENV["XDG_RUNTIME_DIR"], mode=0o700)
 NOTES = os.path.join(TMP, "notifications.log")
-os.makedirs(f"{TMP}/bin")
-for stub in ("notify-send", "osascript"):
-    with open(f"{TMP}/bin/{stub}", "w") as f:
-        f.write(f'#!/bin/sh\necho "$*" >> "{NOTES}"\n')
-    os.chmod(f"{TMP}/bin/{stub}", 0o755)
-ENV["PATH"] = f"{TMP}/bin:" + ENV["PATH"]
+ENV["AGENTSSH_E2E_NOTES"] = NOTES
 
 passed = 0
 
@@ -245,8 +245,6 @@ def main():
         check("waiting approval #" in line, "mutate from Codex needs out-of-band approval (no soft ask)", line)
         t = Tty("approve")
         t.expect(r"agent=codex")
-        t.expect(r"approval code \(from the desktop notification\): ")
-        t.send(last_code())
         t.expect(r"\[y\] once")
         t.send("n")
         t.expect("denied")
@@ -277,15 +275,15 @@ def main():
         t.expect(r"level: .*DESTRUCTIVE")
         t.expect(r"rm " + re.escape(victim))
         code = last_code()
+        t.expect(r"\[y\] once")
+        t.send("y")
         t.expect(r"approval code \(from the desktop notification\): ")
         t.send("ZZZZ")
+        t.expect(r"tries left")
         t.expect(r"\[y\] once")
         t.send("y")
-        t.expect(r"tries left")
         t.expect(r"approval code \(from the desktop notification\): ")
         t.send(code)
-        t.expect(r"\[y\] once")
-        t.send("y")
         t.expect("approved once")
         out, err = agent.communicate(timeout=30)
         check(agent.returncode == 0 and "waiting approval #" in err and not os.path.exists(victim),
@@ -299,12 +297,12 @@ def main():
         t = Tty("approve")
         t.expect(r"DESTRUCTIVE")
         code = last_code()
-        t.expect(r"approval code \(from the desktop notification\): ")
-        t.send(code)
         t.expect(r"\[y\] once")
         t.send("m")
         t.expect("message for the agent: ")
         t.send("use logrotate instead")
+        t.expect(r"approval code \(from the desktop notification\): ")
+        t.send(code)
         out, err = agent.communicate(timeout=30)
         check(agent.returncode == 101 and "use logrotate instead" in err and os.path.exists(victim2),
               "denial with message gives 101", out + err)
@@ -374,10 +372,10 @@ def main():
         check(not err and "approval required" in text, "mcp returns approval id instead of blocking", text)
         t = Tty("approve")
         t.expect(r"DESTRUCTIVE")
-        t.expect(r"approval code \(from the desktop notification\): ")
-        t.send(last_code())
         t.expect(r"\[y\] once")
         t.send("y")
+        t.expect(r"approval code \(from the desktop notification\): ")
+        t.send(last_code())
         t.expect("approved once")
         t.p.kill()
         text, err = tool(6, "run", host="e2e", command=f"rm {victim3}", approval_id=aid)
@@ -418,6 +416,67 @@ def main():
         rc, _, err = run("run", "e2e", "echo hi")
         check(rc == 102 and "locked" in err, "lock wipes keys: 102")
 
+        # OS mode, with the fake dialog of the e2efake build.
+        os.kill(daemon_pid, signal.SIGTERM)
+        time.sleep(0.5)
+        gate = os.path.join(TMP, "humanok")
+        open(gate, "w").write("deny")
+        ENV["AGENTSSH_E2E_HUMANOK"] = gate
+        ENV["AGENTSSH_OS_AUTH"] = "1"  # OS mode on every OS for the fake confirmer
+        out = subprocess.run([BIN, "daemon", "--detach"], env=ENV, capture_output=True, text=True).stdout
+        daemon_pid = int(re.search(r"pid (\d+)", out).group(1))
+        for _ in range(50):
+            if os.path.exists(ENV["AGENTSSH_SOCKET"]):
+                break
+            time.sleep(0.1)
+        t = Tty("unlock")
+        t.expect("vault passphrase: ")
+        t.send(PASS)
+        t.wait()
+        rc, out, _ = run("doctor")
+        check("approvals use OS authentication" in out, "doctor reports OS authentication", out)
+        victim4 = os.path.join(remote, "victim4")
+        open(victim4, "w").write("x")
+        agent = subprocess.Popen([BIN, "run", "e2e", f"rm {victim4}"], env=ENV, stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        t = Tty("approve")
+        t.expect(r"DESTRUCTIVE")
+        t.expect(r"\[y\] once")
+        t.send("y")
+        t.expect("not confirmed")          # OS dialog refused
+        open(gate, "w").write("allow")
+        t.expect(r"\[y\] once")
+        t.send("y")
+        t.expect("approved once")
+        out, err = agent.communicate(timeout=30)
+        log = open(gate + ".log").read()
+        check(agent.returncode == 0 and not os.path.exists(victim4) and f"rm {victim4}" in log,
+              "approve via OS authentication (no code), dialog shows the command", out + err + log)
+        t.p.kill()
+        t = Tty("key", "gen", "osauth")
+        t.expect(r"ssh-ed25519 ")
+        check(t.wait() == 0 and "key-gen osauth" in open(gate + ".log").read(), "admin op via OS authentication")
+        # The OS dialog breaks: the daemon stays in OS mode; the human can still deny.
+        open(gate, "w").write("unavailable")
+        victim5 = os.path.join(remote, "victim5")
+        open(victim5, "w").write("x")
+        agent = subprocess.Popen([BIN, "run", "e2e", f"rm {victim5}"], env=ENV, stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        t = Tty("approve")
+        t.expect(r"DESTRUCTIVE")
+        t.expect(r"\[y\] once")
+        t.send("y")
+        t.expect("AGENTSSH_OS_AUTH=0")
+        t.expect(r"\[y\] once")
+        t.send("n")
+        t.expect("denied")
+        out, err = agent.communicate(timeout=30)
+        check(agent.returncode == 101 and os.path.exists(victim5),
+              "OS dialog breaks: error names AGENTSSH_OS_AUTH=0, deny still works", out + err)
+        t.p.kill()
+        rc, out, _ = run("doctor")
+        check("approvals use OS authentication" in out, "a broken dialog does not switch to codes", out)
+        ENV.pop("AGENTSSH_E2E_HUMANOK")
         os.kill(daemon_pid, signal.SIGTERM)
         daemon_pid = None
         time.sleep(0.5)

@@ -180,6 +180,7 @@ func (s *Service) Exec(a *ExecArgs, r *ExecReply) error {
 			}
 			id = a.ApprovalID
 			e.ID, e.CodeOK = id, &dec.CodeOK
+			e.Auth = dec.Auth
 			if !dec.OK {
 				e.Decision, e.Note = dec.Outcome, dec.Message
 				d.log.Write(e)
@@ -485,6 +486,12 @@ func (s *Service) Status(_ *Empty, r *StatusReply) error {
 	r.VaultMissing = err != nil
 	r.Passphrase = salt != nil
 	r.Pending = len(d.q.Pending())
+	r.Auth = "code"
+	if err := d.authProblem(); err == nil {
+		r.Auth = "os"
+	} else {
+		r.AuthNote = err.Error()
+	}
 	return nil
 }
 
@@ -496,7 +503,36 @@ func (s *Service) Pending(_ *Empty, r *[]approval.Request) error {
 }
 
 func (s *Service) Decide(a *DecideArgs, _ *Empty) error {
-	_, err := s.d.q.Decide(a.ID, a.Code, a.Choice, a.Note)
+	d := s.d
+	switch a.Choice {
+	case "y", "s", "n", "m":
+	default:
+		return fmt.Errorf("unknown choice %q", a.Choice)
+	}
+	switch {
+	case a.Choice == "n": // denying needs no proof
+		_, err := d.q.Resolve(a.ID, a.Choice, a.Note, "none")
+		return err
+	case !d.osAuth():
+		_, err := d.q.Decide(a.ID, a.Code, a.Choice, a.Note)
+		return err
+	}
+	req, ok := d.q.Get(a.ID)
+	if !ok {
+		return fmt.Errorf("no pending request #%d", a.ID)
+	}
+	lvl := strings.ToUpper(fmt.Sprint(req.Level))
+	msg := fmt.Sprintf("[%s] approve #%d on %s: %s", lvl, a.ID, req.Host, req.Cmd)
+	switch a.Choice {
+	case "s":
+		msg += " \u2014 and the same command for 30 minutes"
+	case "m":
+		msg = fmt.Sprintf("[%s] deny #%d on %s with a message to the agent: %s \u2014 message: %q", lvl, a.ID, req.Host, req.Cmd, a.Note)
+	}
+	if err := d.confirm(msg); err != nil {
+		return err
+	}
+	_, err := d.q.Resolve(a.ID, a.Choice, a.Note, "os")
 	return err
 }
 
