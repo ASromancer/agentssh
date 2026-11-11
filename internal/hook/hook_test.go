@@ -83,6 +83,12 @@ func TestBash(t *testing.T) {
 		{`systemctl --user restart agentssh.service`, "deny"},
 		{`systemctl --user set-environment AGENTSSH_OS_AUTH=0`, "deny"},
 		{`$env:agentssh_os_auth = "0"`, "deny"},
+		{`systemctl --user restart agentssh`, "deny"},
+		{`pkill agentssh`, "deny"},
+		{`pkill -f "agentssh daemon"`, "deny"},
+		{`killall agentssh`, "deny"},
+		{`kill 1234`, ""},
+		{`/usr/bin/pkill agentssh`, "deny"},
 	} {
 		if got := run(t, "Bash", map[string]any{"command": tc.cmd}); got != tc.want {
 			t.Errorf("%s: got %q want %q", tc.cmd, got, tc.want)

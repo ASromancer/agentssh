@@ -98,6 +98,8 @@ var (
 	directSSH  = map[string]bool{"ssh": true, "scp": true, "sftp": true, "mosh": true, "slogin": true}
 	humanOnly  = map[string]bool{"approve": true, "key": true, "reload": true, "host": true, "init": true, "install-hooks": true, "unlock": true, "daemon": true}
 	readOnlyUs = map[string]bool{"hosts": true, "out": true, "explain": true, "help": true, "version": true}
+	// A restarted daemon picks its auth mode again, so stopping it is human only.
+	stopTools = map[string]bool{"systemctl": true, "pkill": true, "kill": true, "killall": true}
 )
 
 // Shell tools of each agent: Claude/Codex Bash, Codex shell/exec_command,
@@ -211,6 +213,8 @@ func bash(cmd, cwd string, protected []string, explain Explainer) (string, strin
 		switch {
 		case directSSH[name]:
 			return "deny", fmt.Sprintf("do not call %s directly; use 'agentssh run <host> \"<cmd>\"' (see 'agentssh hosts')", name)
+		case stopTools[name] && strings.Contains(strings.ToLower(strings.Join(argv[1:], " ")), "agentssh"):
+			return "deny", "stopping or restarting agentssh is for the human user only"
 		case name == "rsync":
 			for _, a := range argv[1:] {
 				if remoteArg(a) {
