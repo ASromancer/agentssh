@@ -18,11 +18,13 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/ASromancer/agentssh/internal/approval"
+	"github.com/ASromancer/agentssh/internal/humanok"
 	"github.com/ASromancer/agentssh/internal/paths"
 	"github.com/ASromancer/agentssh/internal/sshconn"
 	"github.com/ASromancer/agentssh/internal/vault"
@@ -210,6 +212,7 @@ key = "k1"
 		t.Fatal(err)
 	}
 	h.d = d
+	d.human = &humanok.Fake{Err: humanok.ErrUnavailable} // stay in code mode even where polkit exists
 	ln, err := net.Listen("unix", paths.Socket())
 	if err != nil {
 		t.Fatal(err)
@@ -380,5 +383,94 @@ func TestDaemonEndToEnd(t *testing.T) {
 	b, _ := os.ReadFile(paths.Audit())
 	if !bytes.Contains(b, []byte(`"decision":"approved"`)) || bytes.Contains(b, []byte("payload")) {
 		t.Fatalf("audit:\n%s", b)
+	}
+}
+
+func TestOSAuth(t *testing.T) {
+	h := setup(t)
+	fake := &humanok.Fake{Allow: false}
+	h.d.human = fake
+	if err := h.call("Unlock", &UnlockArgs{Pass: "pw"}, &Empty{}); err != nil {
+		t.Fatal(err)
+	}
+	var st StatusReply
+	h.call("Status", &Empty{}, &st)
+	if st.Auth != "os" {
+		t.Fatalf("status auth %q", st.Auth)
+	}
+
+	victim := h.remote + "/osauth"
+	os.WriteFile(victim, []byte("x"), 0o600)
+	rm := ExecArgs{Cmd: "rm " + victim}
+	r := h.exec(rm)
+	if r.Pending == 0 {
+		t.Fatalf("expected pending: %+v", r)
+	}
+	h.mu.Lock()
+	note := h.notes[len(h.notes)-1]
+	h.mu.Unlock()
+	if strings.Contains(note, "code:") {
+		t.Fatal("notification carries a code in OS-auth mode")
+	}
+	// The OS dialog is refused: still pending, nothing ran.
+	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Choice: "y"}, &Empty{}); err == nil {
+		t.Fatal("approved without OS authentication")
+	}
+	if msgs := fake.Msgs(); len(msgs) != 1 || !strings.Contains(msgs[0], "rm "+victim) || !strings.Contains(msgs[0], "destructive") {
+		t.Fatalf("dialog text %q", msgs)
+	}
+	fake.Allow = true
+	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Choice: "y"}, &Empty{}); err != nil {
+		t.Fatal(err)
+	}
+	rm.ApprovalID = r.Pending
+	if r := h.exec(rm); r.Exit != 0 || r.Code != 0 {
+		t.Fatalf("run after OS approval: %+v", r)
+	}
+
+	// Denial needs no authentication.
+	before := len(fake.Msgs())
+	r = h.exec(ExecArgs{Cmd: "rm -rf /tmp/never"})
+	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Choice: "n"}, &Empty{}); err != nil || len(fake.Msgs()) != before {
+		t.Fatalf("deny: %v, dialogs %d", err, len(fake.Msgs())-before)
+	}
+
+	// Admin without a code.
+	var br BeginReply
+	h.call("Begin", &BeginArgs{Op: "key-gen", Name: "os1"}, &br)
+	var ar AdminReply
+	if !br.OSAuth {
+		t.Fatal("Begin did not report OS auth")
+	}
+	if err := h.call("Admin", &AdminArgs{Ticket: br.Ticket, Op: "key-gen", Name: "os1"}, &ar); err != nil || !strings.HasPrefix(ar.Out, "ssh-ed25519 ") {
+		t.Fatalf("admin: %v %q", err, ar.Out)
+	}
+	if last := fake.Msgs()[len(fake.Msgs())-1]; !strings.Contains(last, "key-gen os1") {
+		t.Fatalf("admin dialog %q", last)
+	}
+
+	b, _ := os.ReadFile(paths.Audit())
+	if !bytes.Contains(b, []byte(`"auth":"os"`)) {
+		t.Fatalf("audit lacks auth=os:\n%s", b)
+	}
+}
+
+func TestDialogText(t *testing.T) {
+	long := strings.Repeat("é", 600) // 1200 bytes
+	for _, c := range []struct{ in, want string }{
+		{"hello", "hello"},
+		{"", "confirm an agentssh action"},
+		{" \t\n", "confirm an agentssh action"},
+		{"\x00\x00", "confirm an agentssh action"},
+		{"a\x00b", "ab"},
+		{"a\xffb", "a\uFFFDb"},
+	} {
+		if got := dialogText(c.in); got != c.want {
+			t.Errorf("dialogText(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	got := dialogText(long)
+	if !strings.HasSuffix(got, "…") || !utf8.ValidString(got) || len(got) > 1000+len("…") {
+		t.Errorf("long text: len %d valid %v", len(got), utf8.ValidString(got))
 	}
 }

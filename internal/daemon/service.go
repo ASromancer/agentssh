@@ -180,6 +180,7 @@ func (s *Service) Exec(a *ExecArgs, r *ExecReply) error {
 			}
 			id = a.ApprovalID
 			e.ID, e.CodeOK = id, &dec.CodeOK
+			e.Auth = dec.Auth
 			if !dec.OK {
 				e.Decision, e.Note = dec.Outcome, dec.Message
 				d.log.Write(e)
@@ -485,6 +486,12 @@ func (s *Service) Status(_ *Empty, r *StatusReply) error {
 	r.VaultMissing = err != nil
 	r.Passphrase = salt != nil
 	r.Pending = len(d.q.Pending())
+	r.Auth = "code"
+	if err := d.human.Available(); err == nil {
+		r.Auth = "os"
+	} else {
+		r.AuthNote = err.Error()
+	}
 	return nil
 }
 
@@ -496,7 +503,27 @@ func (s *Service) Pending(_ *Empty, r *[]approval.Request) error {
 }
 
 func (s *Service) Decide(a *DecideArgs, _ *Empty) error {
-	_, err := s.d.q.Decide(a.ID, a.Code, a.Choice, a.Note)
+	d := s.d
+	switch {
+	case a.Choice == "n" || a.Choice == "m": // denying needs no proof
+		_, err := d.q.Resolve(a.ID, a.Choice, a.Note, "none")
+		return err
+	case !d.osAuth():
+		_, err := d.q.Decide(a.ID, a.Code, a.Choice, a.Note)
+		return err
+	}
+	req, ok := d.q.Get(a.ID)
+	if !ok {
+		return fmt.Errorf("no pending request #%d", a.ID)
+	}
+	msg := fmt.Sprintf("approve on %s: %s [%s]", req.Host, req.Cmd, req.Level)
+	if a.Choice == "s" {
+		msg += " (and the same command for 30 minutes)"
+	}
+	if err := d.confirm(msg); err != nil {
+		return err
+	}
+	_, err := d.q.Resolve(a.ID, a.Choice, a.Note, "os")
 	return err
 }
 

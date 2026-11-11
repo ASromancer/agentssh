@@ -3,6 +3,7 @@
 package daemon
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -20,10 +21,12 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ASromancer/agentssh/internal/approval"
 	"github.com/ASromancer/agentssh/internal/audit"
 	"github.com/ASromancer/agentssh/internal/hosts"
+	"github.com/ASromancer/agentssh/internal/humanok"
 	"github.com/ASromancer/agentssh/internal/paths"
 	"github.com/ASromancer/agentssh/internal/policy"
 	"github.com/ASromancer/agentssh/internal/sshconn"
@@ -42,9 +45,10 @@ type Daemon struct {
 	userOnly bool // config on disk differs from the approved hash
 	jobs     map[int]*sshconn.Job
 
-	q    *approval.Queue
-	pool *sshconn.Pool
-	log  *audit.Log
+	q     *approval.Queue
+	human humanok.Confirmer
+	pool  *sshconn.Pool
+	log   *audit.Log
 }
 
 func New(notify func(title, body string) error, approvalTimeout time.Duration) (*Daemon, error) {
@@ -59,11 +63,45 @@ func New(notify func(title, body string) error, approvalTimeout time.Duration) (
 		pool: sshconn.NewPool(paths.KnownHosts()),
 		log:  &audit.Log{Path: paths.Audit()},
 	}
+	d.human = humanok.Default
+	d.q.UseCodes = func() bool { return d.human.Available() != nil }
 	if err := d.loadConfig(); err != nil {
 		return nil, err
 	}
 	d.autoUnlock()
 	return d, nil
+}
+
+// osAuth reports whether the human is authenticated through the OS.
+func (d *Daemon) osAuth() bool { return d.human.Available() == nil }
+
+const (
+	confirmTimeout = 2 * time.Minute
+	maxDialogBytes = 1000
+)
+
+// dialogText makes any message safe for every OS backend: valid UTF-8, no
+// NUL, never empty, bounded.
+func dialogText(msg string) string {
+	msg = strings.ToValidUTF8(msg, "\uFFFD")
+	msg = strings.ReplaceAll(msg, "\x00", "")
+	if strings.TrimSpace(msg) == "" {
+		return "confirm an agentssh action"
+	}
+	if len(msg) > maxDialogBytes {
+		cut := maxDialogBytes
+		for !utf8.RuneStart(msg[cut]) {
+			cut--
+		}
+		msg = msg[:cut] + "…"
+	}
+	return msg
+}
+
+func (d *Daemon) confirm(msg string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), confirmTimeout)
+	defer cancel()
+	return d.human.Confirm(ctx, dialogText(msg))
 }
 
 func (d *Daemon) loadConfig() error {

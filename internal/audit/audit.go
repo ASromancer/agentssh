@@ -22,6 +22,7 @@ type Entry struct {
 	Level      string    `json:"level,omitempty"`
 	Decision   string    `json:"decision"` // allow|ask|approved|denied|forbidden|blocked|timeout|error
 	CodeOK     *bool     `json:"code_ok,omitempty"`
+	Auth       string    `json:"auth,omitempty"` // code|os|passphrase|none
 	Exit       *int      `json:"exit,omitempty"`
 	DurationMs int64     `json:"duration_ms,omitempty"`
 	Bytes      int64     `json:"bytes,omitempty"`

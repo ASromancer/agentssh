@@ -33,6 +33,11 @@ func (s *Service) Unlock(a *UnlockArgs, _ *Empty) error {
 	}
 	var key *[32]byte
 	if salt == nil {
+		if s.d.osAuth() {
+			if err := s.d.confirm("unlock the agentssh vault"); err != nil {
+				return err
+			}
+		}
 		if key, err = vault.KeyringGet(); err != nil {
 			return fmt.Errorf("keyring: %w", err)
 		}
@@ -66,13 +71,24 @@ func (s *Service) Begin(a *BeginArgs, r *BeginReply) error {
 		data = key
 	}
 	r.Ticket, r.Code = s.d.q.Ticket(a.Op+" "+a.Name, detail, data)
+	r.OSAuth = s.d.osAuth()
 	return nil
 }
 
 func (s *Service) Admin(a *AdminArgs, r *AdminReply) error {
 	d := s.d
-	data, err := d.q.Check(a.Ticket, a.Op+" "+a.Name, a.Code)
-	e := audit.Entry{Kind: "admin", Cmd: strings.TrimSpace(a.Op + " " + a.Name)}
+	op := a.Op + " " + a.Name
+	e := audit.Entry{Kind: "admin", Cmd: strings.TrimSpace(op), Auth: "code"}
+	var data any
+	var err error
+	if d.osAuth() {
+		e.Auth = "os"
+		if data, err = d.q.Take(a.Ticket, op); err == nil {
+			err = d.confirm(adminMessage(a, data))
+		}
+	} else {
+		data, err = d.q.Check(a.Ticket, op, a.Code)
+	}
 	ok := err == nil
 	e.CodeOK = &ok
 	if err != nil {
@@ -88,6 +104,22 @@ func (s *Service) Admin(a *AdminArgs, r *AdminReply) error {
 	}
 	d.log.Write(e)
 	return nil
+}
+
+// adminMessage is the OS dialog text for an admin operation.
+func adminMessage(a *AdminArgs, data any) string {
+	switch a.Op {
+	case "trust":
+		if k, ok := data.(ssh.PublicKey); ok {
+			return fmt.Sprintf("trust host key %s for %s", ssh.FingerprintSHA256(k), a.Name)
+		}
+	case "host-set":
+		if a.Host != nil {
+			return fmt.Sprintf("save host %s (%s@%s, profile %s, agent access %v)",
+				a.Name, a.Host.User, a.Host.Addr(), a.Host.EffectiveProfile(), a.Host.Agent)
+		}
+	}
+	return strings.TrimSpace("agentssh " + a.Op + " " + a.Name)
 }
 
 func (d *Daemon) admin(a *AdminArgs, data any, r *AdminReply) error {
