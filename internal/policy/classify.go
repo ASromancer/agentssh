@@ -283,8 +283,8 @@ var (
 	interactive = map[string]string{
 		"vim": "cat / sed -n", "vi": "cat / sed -n", "nano": "cat / sed -n", "emacs": "cat / sed -n",
 		"top": "top -bn1", "htop": "top -bn1", "less": "cat / head / tail", "more": "cat / head / tail",
-		"watch": "run the command once", "ssh": "agentssh run on the target host", "man": "<cmd> --help",
-		"mosh": "agentssh run on the target host", "tmux": "agentssh job start", "screen": "agentssh job start",
+		"watch": "run the command once", "ssh": "ostiary run on the target host", "man": "<cmd> --help",
+		"mosh": "ostiary run on the target host", "tmux": "ostiary job start", "screen": "ostiary job start",
 	}
 	sqlClients = set("psql mysql mariadb sqlite3")
 	netcats    = set("nc ncat netcat")
@@ -542,7 +542,7 @@ func (c *classifier) pipe(b *syntax.BinaryCmd, base int) {
 // Calls returns the argv of every simple command in cmd, with paths and
 // wrappers (sudo, env, ...) stripped and static "sh -c" scripts expanded.
 // Words that are not static read as "$?". writes reports redirects into
-// real files. Used by agent hooks to spot ssh and agentssh invocations.
+// real files. Used by agent hooks to spot ssh and ostiary invocations.
 func Calls(cmd string) (calls [][]string, writes bool, err error) {
 	err = calls1(cmd, 0, &calls, &writes)
 	return calls, writes, err

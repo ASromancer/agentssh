@@ -1,10 +1,10 @@
 {
-  "description": "agentssh soft layer: deny direct ssh/scp/rsync and human-only agentssh commands, ask before state-changing remote commands, protect agentssh config.",
+  "description": "ostiary soft layer: deny direct ssh/scp/rsync and human-only ostiary commands, ask before state-changing remote commands, protect ostiary config.",
   "hooks": {
     "PreToolUse": [
       {
         "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
-        "hooks": [{ "type": "command", "command": "agentssh hook claude", "timeout": 10 }]
+        "hooks": [{ "type": "command", "command": "ostiary hook claude", "timeout": 10 }]
       }
     ]
   }

@@ -1,4 +1,4 @@
-// Package daemon is the long-running agentssh process: it holds decrypted
+// Package daemon is the long-running ostiary process: it holds decrypted
 // keys in memory, enforces policy, runs approvals and talks SSH.
 package daemon
 
@@ -25,14 +25,14 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/ASromancer/agentssh/internal/approval"
-	"github.com/ASromancer/agentssh/internal/audit"
-	"github.com/ASromancer/agentssh/internal/hosts"
-	"github.com/ASromancer/agentssh/internal/humanok"
-	"github.com/ASromancer/agentssh/internal/paths"
-	"github.com/ASromancer/agentssh/internal/policy"
-	"github.com/ASromancer/agentssh/internal/sshconn"
-	"github.com/ASromancer/agentssh/internal/vault"
+	"github.com/ASromancer/ostiary/internal/approval"
+	"github.com/ASromancer/ostiary/internal/audit"
+	"github.com/ASromancer/ostiary/internal/hosts"
+	"github.com/ASromancer/ostiary/internal/humanok"
+	"github.com/ASromancer/ostiary/internal/paths"
+	"github.com/ASromancer/ostiary/internal/policy"
+	"github.com/ASromancer/ostiary/internal/sshconn"
+	"github.com/ASromancer/ostiary/internal/vault"
 )
 
 const outRetention = 7 * 24 * time.Hour
@@ -71,7 +71,7 @@ func New(notify func(approval.Notice) error, approvalTimeout time.Duration) (*Da
 		log:  &audit.Log{Path: paths.Audit()},
 	}
 	d.human = humanok.Default
-	if why := osAuthOff(runtime.GOOS, os.Getenv("AGENTSSH_OS_AUTH")); why != "" {
+	if why := osAuthOff(runtime.GOOS, os.Getenv("OSTIARY_OS_AUTH")); why != "" {
 		d.human = authOff(why)
 	}
 	d.pickAuth()
@@ -85,15 +85,15 @@ func New(notify func(approval.Notice) error, approvalTimeout time.Duration) (*Da
 
 // osAuthOff returns why OS authentication is off, or "" when it is on.
 // It is on by default only on Linux, the only backend verified on a real
-// machine so far; AGENTSSH_OS_AUTH=1 turns it on, =0 off, everywhere.
+// machine so far; OSTIARY_OS_AUTH=1 turns it on, =0 off, everywhere.
 func osAuthOff(goos, env string) string {
 	switch {
 	case env == "0":
-		return "OS authentication is off (AGENTSSH_OS_AUTH=0)"
+		return "OS authentication is off (OSTIARY_OS_AUTH=0)"
 	case env == "1", goos == "linux":
 		return ""
 	}
-	return "OS authentication is off on " + goos + " until verified; set AGENTSSH_OS_AUTH=1 to enable"
+	return "OS authentication is off on " + goos + " until verified; set OSTIARY_OS_AUTH=1 to enable"
 }
 
 // authOff is the confirmer when OS authentication is turned off.
@@ -152,7 +152,7 @@ func dialogText(msg string) string {
 	}, msg)
 	msg = strings.Join(strings.Fields(msg), " ")
 	if msg == "" {
-		return "confirm an agentssh action"
+		return "confirm an ostiary action"
 	}
 	if len(msg) > maxDialogBytes {
 		h, t := dialogHead, len(msg)-dialogTail
@@ -184,7 +184,7 @@ func (d *Daemon) confirm(msg string) error {
 	if !errors.Is(err, humanok.ErrUnavailable) {
 		return err
 	}
-	return fmt.Errorf("OS authentication failed: %w. Run 'agentssh doctor'; to use approval codes instead, restart the daemon with AGENTSSH_OS_AUTH=0.", err)
+	return fmt.Errorf("OS authentication failed: %w. Run 'ostiary doctor'; to use approval codes instead, restart the daemon with OSTIARY_OS_AUTH=0.", err)
 }
 
 func (d *Daemon) loadConfig() error {
@@ -216,16 +216,16 @@ func ConfigHash() string {
 func (d *Daemon) autoUnlock() {
 	salt, err := vault.Salt(paths.Vault())
 	if err != nil {
-		log.Printf("vault not available (%v); run 'agentssh init'", err)
+		log.Printf("vault not available (%v); run 'ostiary init'", err)
 		return
 	}
 	if salt != nil {
-		log.Print("vault uses a passphrase; waiting for 'agentssh unlock'")
+		log.Print("vault uses a passphrase; waiting for 'ostiary unlock'")
 		return
 	}
 	key, err := vault.KeyringGet()
 	if err != nil {
-		log.Printf("keyring: %v; waiting for 'agentssh unlock'", err)
+		log.Printf("keyring: %v; waiting for 'ostiary unlock'", err)
 		return
 	}
 	if err := d.unlock(key, nil); err != nil {
@@ -246,7 +246,7 @@ func (d *Daemon) unlock(key *[32]byte, salt []byte) error {
 	d.data, d.master, d.salt = data, key, salt
 	d.userOnly = data.ConfigHash != ConfigHash()
 	if d.userOnly {
-		log.Print("hosts.toml/rules.toml changed since last approval: refusing agent requests until 'agentssh reload'")
+		log.Print("hosts.toml/rules.toml changed since last approval: refusing agent requests until 'ostiary reload'")
 	}
 	return nil
 }
@@ -338,7 +338,7 @@ func (d *Daemon) Serve(ln net.Listener) error {
 			time.Sleep(time.Hour)
 		}
 	}()
-	log.Printf("agentssh daemon listening on %s", sock)
+	log.Printf("ostiary daemon listening on %s", sock)
 	err := d.ServeListener(ln)
 	os.Remove(sock)
 	d.lock()

@@ -6,12 +6,12 @@ import (
 	"net/rpc/jsonrpc"
 	"time"
 
-	"github.com/ASromancer/agentssh/internal/hosts"
-	"github.com/ASromancer/agentssh/internal/paths"
-	"github.com/ASromancer/agentssh/internal/policy"
+	"github.com/ASromancer/ostiary/internal/hosts"
+	"github.com/ASromancer/ostiary/internal/paths"
+	"github.com/ASromancer/ostiary/internal/policy"
 )
 
-// agentssh-specific exit codes (spec 6.1).
+// ostiary-specific exit codes (spec 6.1).
 const (
 	CodeBlocked  = 100 // forbidden, profile does not allow, host not allowed
 	CodeDenied   = 101 // denied or approval timed out
@@ -55,7 +55,7 @@ type ExecArgs struct {
 
 type ExecReply struct {
 	Code    int    // CodeBlocked/CodeDenied/CodeNoDaemon, 0 otherwise
-	Msg     string // shown on stderr with the "agentssh:" prefix
+	Msg     string // shown on stderr with the "ostiary:" prefix
 	Pending int    // approval needed: call again with ApprovalID = Pending
 	ID      int
 	Exit    int

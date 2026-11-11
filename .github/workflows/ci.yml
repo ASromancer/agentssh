@@ -30,8 +30,8 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           command -v sshd || sudo apt-get install -y openssh-server
-          go build -tags e2efake -o "$RUNNER_TEMP/agentssh-e2e" .
-          python3 scripts/e2e.py "$RUNNER_TEMP/agentssh-e2e"
+          go build -tags e2efake -o "$RUNNER_TEMP/ostiary-e2e" .
+          python3 scripts/e2e.py "$RUNNER_TEMP/ostiary-e2e"
   build-unix-windows:
     needs: test
     runs-on: ubuntu-latest
@@ -44,13 +44,13 @@ jobs:
           for t in linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
             os=${t%/*}; arch=${t#*/}; ext=""; [ "$os" = windows ] && ext=.exe
             GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath \
-              -ldflags "-s -w -X github.com/ASromancer/agentssh/internal/cli.Version=${GITHUB_REF_NAME#v}" \
-              -o dist/agentssh-$os-$arch$ext .
+              -ldflags "-s -w -X github.com/ASromancer/ostiary/internal/cli.Version=${GITHUB_REF_NAME#v}" \
+              -o dist/ostiary-$os-$arch$ext .
           done
       - name: release binaries contain no e2e test hooks
         run: |
           for f in dist/*; do
-            n=$(grep -a -c -e AGENTSSH_E2E_HUMANOK -e AGENTSSH_E2E_NOTES "$f" || true)
+            n=$(grep -a -c -e OSTIARY_E2E_HUMANOK -e OSTIARY_E2E_NOTES "$f" || true)
             echo "$f: $n"; [ "$n" = 0 ]
           done
       - uses: actions/upload-artifact@v4
@@ -67,13 +67,13 @@ jobs:
           for arch in amd64 arm64; do
             cc_arch=$([ $arch = amd64 ] && echo x86_64 || echo arm64)
             CGO_ENABLED=1 GOOS=darwin GOARCH=$arch CC="clang -arch $cc_arch" go build -trimpath \
-              -ldflags "-s -w -X github.com/ASromancer/agentssh/internal/cli.Version=${GITHUB_REF_NAME#v}" \
-              -o dist/agentssh-darwin-$arch .
+              -ldflags "-s -w -X github.com/ASromancer/ostiary/internal/cli.Version=${GITHUB_REF_NAME#v}" \
+              -o dist/ostiary-darwin-$arch .
           done
       - name: release binaries contain no e2e test hooks
         run: |
           for f in dist/*; do
-            n=$(grep -a -c -e AGENTSSH_E2E_HUMANOK -e AGENTSSH_E2E_NOTES "$f" || true)
+            n=$(grep -a -c -e OSTIARY_E2E_HUMANOK -e OSTIARY_E2E_NOTES "$f" || true)
             echo "$f: $n"; [ "$n" = 0 ]
           done
       - uses: actions/upload-artifact@v4
@@ -86,7 +86,7 @@ jobs:
         with: { path: dist, merge-multiple: true }
       - run: cd dist && sha256sum * > SHA256SUMS && ls -l
       - uses: actions/upload-artifact@v4
-        with: { name: agentssh, path: dist/ }
+        with: { name: ostiary, path: dist/ }
       - if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}

@@ -1,4 +1,4 @@
-module github.com/ASromancer/agentssh
+module github.com/ASromancer/ostiary
 
 go 1.26.0
 

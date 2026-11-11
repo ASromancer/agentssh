@@ -255,7 +255,7 @@ func TestNotifyEnv(t *testing.T) {
 	env := []string{"LD_PRELOAD=/tmp/evil.so", "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1/bus",
 		"XDG_RUNTIME_DIR=/run/user/1", "DISPLAY=:0", "WAYLAND_DISPLAY=wayland-0", "HOME=/home/u",
 		"LANG=C.UTF-8", "LC_ALL=C", "PATH=/tmp/evil", "DBUS_SYSTEM_BUS_ADDRESS=x", "display=:9",
-		"SystemRoot=C:\\Windows", "TEMP=C:\\t", "AGENTSSH_TITLE=forged"}
+		"SystemRoot=C:\\Windows", "TEMP=C:\\t", "OSTIARY_TITLE=forged"}
 	got := strings.Join(notifyEnv(env, "linux"), " ")
 	if want := "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1/bus XDG_RUNTIME_DIR=/run/user/1 DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 HOME=/home/u LANG=C.UTF-8 LC_ALL=C"; got != want {
 		t.Errorf("linux:\n got %s\nwant %s", got, want)
@@ -266,7 +266,7 @@ func TestNotifyEnv(t *testing.T) {
 			t.Errorf("windows: missing %s in %s", w, got)
 		}
 	}
-	for _, bad := range []string{"LD_PRELOAD", "PATH=", "DBUS_SYSTEM", "AGENTSSH_TITLE"} {
+	for _, bad := range []string{"LD_PRELOAD", "PATH=", "DBUS_SYSTEM", "OSTIARY_TITLE"} {
 		if strings.Contains(got, bad) {
 			t.Errorf("windows: %s leaked into %s", bad, got)
 		}
@@ -299,11 +299,11 @@ func TestNoticeLink(t *testing.T) {
 
 func TestLinuxNotifyArgs(t *testing.T) {
 	plain := linuxNotifyArgs(Notice{Title: "t", Body: "b"})
-	if strings.Join(plain, " ") != "-u critical -a agentssh -- t b" {
+	if strings.Join(plain, " ") != "-u critical -a ostiary -- t b" {
 		t.Fatalf("plain %q", plain)
 	}
 	linked := strings.Join(linuxNotifyArgs(Notice{Title: "t", Body: "b", Link: "http://127.0.0.1:9/"}), " ")
-	if linked != "-u critical -a agentssh -A open=Mở --wait -- t b" {
+	if linked != "-u critical -a ostiary -A open=Mở --wait -- t b" {
 		t.Fatalf("linked %q", linked)
 	}
 }

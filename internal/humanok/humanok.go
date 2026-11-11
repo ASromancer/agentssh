@@ -64,11 +64,11 @@ func (f *Fake) Msgs() []string {
 
 // polkit action used on Linux.
 const (
-	ActionID   = "dev.agentssh.confirm"
-	PolicyPath = "/usr/share/polkit-1/actions/dev.agentssh.policy"
+	ActionID   = "dev.ostiary.confirm"
+	PolicyPath = "/usr/share/polkit-1/actions/dev.ostiary.policy"
 )
 
-// PolicyXML is the polkit action installed by 'sudo agentssh install-polkit'.
+// PolicyXML is the polkit action installed by 'sudo ostiary install-polkit'.
 // auth_self (not auth_self_keep): every action needs its own
 // authentication. polkit only lets uid 0 or an action owner pass details
 // (the $(message) text), so the installing user is the owner.
@@ -77,11 +77,11 @@ func PolicyXML(owner string) string {
 <!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
 <policyconfig>
-  <vendor>agentssh</vendor>
-  <vendor_url>https://github.com/ASromancer/agentssh</vendor_url>
-  <action id="dev.agentssh.confirm">
-    <description>Confirm an agentssh action</description>
-    <message>agentssh: $(message)</message>
+  <vendor>ostiary</vendor>
+  <vendor_url>https://github.com/ASromancer/ostiary</vendor_url>
+  <action id="dev.ostiary.confirm">
+    <description>Confirm an Ostiary action</description>
+    <message>Ostiary: $(message)</message>
     <defaults>
       <allow_any>auth_self</allow_any>
       <allow_inactive>auth_self</allow_inactive>
@@ -100,7 +100,7 @@ func InstallPolicy() error {
 		return fmt.Errorf("polkit is only used on Linux; nothing to install on %s", runtime.GOOS)
 	}
 	if os.Geteuid() != 0 {
-		return errors.New("run it with sudo: sudo agentssh install-polkit")
+		return errors.New("run it with sudo: sudo ostiary install-polkit")
 	}
 	owner := os.Getenv("SUDO_USER")
 	if owner == "" || owner == "root" || strings.ContainsAny(owner, "<>&\"'") {

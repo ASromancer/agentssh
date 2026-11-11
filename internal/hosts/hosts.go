@@ -1,4 +1,4 @@
-// Package hosts loads hosts.toml, the per-repo .agentssh.toml and imports
+// Package hosts loads hosts.toml, the per-repo .ostiary.toml and imports
 // ~/.ssh/config. None of these files contain secrets.
 package hosts
 
@@ -15,7 +15,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/ASromancer/agentssh/internal/policy"
+	"github.com/ASromancer/ostiary/internal/policy"
 )
 
 type Host struct {
@@ -77,7 +77,7 @@ func (h *Host) Validate() error {
 
 func (c *Config) Save(path string) error {
 	var b bytes.Buffer
-	b.WriteString("# agentssh hosts. Edit, then run 'agentssh reload' to apply.\n\n")
+	b.WriteString("# ostiary hosts. Edit, then run 'ostiary reload' to apply.\n\n")
 	if err := toml.NewEncoder(&b).Encode(c); err != nil {
 		return err
 	}
@@ -91,7 +91,7 @@ func (c *Config) Save(path string) error {
 	return os.Rename(tmp, path)
 }
 
-// Repo is a .agentssh.toml found in the working directory or above.
+// Repo is a .ostiary.toml found in the working directory or above.
 // It can only narrow what agents see, never widen it.
 type Repo struct {
 	Hosts      []string `toml:"hosts"`
@@ -99,9 +99,9 @@ type Repo struct {
 	Dir        string   `toml:"-"`
 }
 
-const RepoFile = ".agentssh.toml"
+const RepoFile = ".ostiary.toml"
 
-// FindRepo walks up from cwd looking for .agentssh.toml. nil means none.
+// FindRepo walks up from cwd looking for .ostiary.toml. nil means none.
 func FindRepo(cwd string) (*Repo, error) {
 	if cwd == "" {
 		return nil, nil

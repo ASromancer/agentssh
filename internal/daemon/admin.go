@@ -11,11 +11,11 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/ASromancer/agentssh/internal/audit"
-	"github.com/ASromancer/agentssh/internal/hosts"
-	"github.com/ASromancer/agentssh/internal/paths"
-	"github.com/ASromancer/agentssh/internal/sshconn"
-	"github.com/ASromancer/agentssh/internal/vault"
+	"github.com/ASromancer/ostiary/internal/audit"
+	"github.com/ASromancer/ostiary/internal/hosts"
+	"github.com/ASromancer/ostiary/internal/paths"
+	"github.com/ASromancer/ostiary/internal/sshconn"
+	"github.com/ASromancer/ostiary/internal/vault"
 )
 
 func vaultSalt() ([]byte, error) { return vault.Salt(paths.Vault()) }
@@ -37,7 +37,7 @@ func (s *Service) Unlock(a *UnlockArgs, _ *Empty) error {
 		auth = "none"
 		if s.d.osAuth() {
 			auth = "os"
-			if err := s.d.confirm("unlock the agentssh vault"); err != nil {
+			if err := s.d.confirm("unlock the ostiary vault"); err != nil {
 				s.d.log.Write(audit.Entry{Kind: "admin", Cmd: "unlock", Auth: auth, Decision: "denied", Note: err.Error()})
 				return err
 			}
@@ -130,7 +130,7 @@ func (d *Daemon) adminMessage(a *AdminArgs, data any) string {
 				a.Name, h.User, h.Addr(), h.EffectiveProfile(), h.Agent, key, h.Allow, h.Deny)
 		}
 	}
-	return strings.TrimSpace("agentssh " + a.Op + " " + a.Name)
+	return strings.TrimSpace("ostiary " + a.Op + " " + a.Name)
 }
 
 func (d *Daemon) admin(a *AdminArgs, data any, r *AdminReply) error {
@@ -159,7 +159,7 @@ func (d *Daemon) admin(a *AdminArgs, data any, r *AdminReply) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.data == nil {
-		return errors.New("vault is locked; run 'agentssh unlock' first")
+		return errors.New("vault is locked; run 'ostiary unlock' first")
 	}
 	switch a.Op {
 	case "reload":
@@ -169,11 +169,11 @@ func (d *Daemon) admin(a *AdminArgs, data any, r *AdminReply) error {
 		if err := d.authProblem(); err != nil {
 			r.Out = fmt.Sprintf("reloaded %d hosts; approvals use codes (%v)", len(d.cfg.Hosts), err)
 		} else if authNow != nil {
-			r.Out += fmt.Sprintf(" (the dialog cannot be shown right now: %v; run 'agentssh doctor')", authNow)
+			r.Out += fmt.Sprintf(" (the dialog cannot be shown right now: %v; run 'ostiary doctor')", authNow)
 		}
 	case "host-set", "host-rm":
 		if d.userOnly || ConfigHash() != d.data.ConfigHash {
-			return errors.New("hosts.toml or rules.toml changed on disk; review the change and run 'agentssh reload' first")
+			return errors.New("hosts.toml or rules.toml changed on disk; review the change and run 'ostiary reload' first")
 		}
 		cfg := &hosts.Config{Hosts: map[string]*hosts.Host{}}
 		for k, v := range d.cfg.Hosts {
@@ -207,7 +207,7 @@ func (d *Daemon) admin(a *AdminArgs, data any, r *AdminReply) error {
 		if err != nil {
 			return err
 		}
-		block, err := ssh.MarshalPrivateKey(priv, "agentssh-"+a.Name)
+		block, err := ssh.MarshalPrivateKey(priv, "ostiary-"+a.Name)
 		if err != nil {
 			return err
 		}
@@ -216,7 +216,7 @@ func (d *Daemon) admin(a *AdminArgs, data any, r *AdminReply) error {
 			return err
 		}
 		d.data.Keys[a.Name] = pem.EncodeToMemory(block)
-		r.Out = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sp))) + " agentssh-" + a.Name
+		r.Out = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sp))) + " ostiary-" + a.Name
 	case "key-import":
 		if len(a.PEM) > 0 {
 			signer, err := ssh.ParsePrivateKey(a.PEM)

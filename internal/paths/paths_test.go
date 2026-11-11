@@ -7,14 +7,14 @@ import (
 )
 
 func TestWithin(t *testing.T) {
-	base := filepath.Join(t.TempDir(), "agentssh")
+	base := filepath.Join(t.TempDir(), "ostiary")
 	for _, tc := range []struct {
 		p    string
 		want bool
 	}{
 		{base, true},
 		{filepath.Join(base, "vault.bin"), true},
-		{filepath.Join(base, "..", "agentssh", "x"), true},
+		{filepath.Join(base, "..", "ostiary", "x"), true},
 		{base + "-other", false},
 		{filepath.Dir(base), false},
 	} {
@@ -22,7 +22,7 @@ func TestWithin(t *testing.T) {
 			t.Errorf("Within(%q): got %v", tc.p, got)
 		}
 	}
-	if runtime.GOOS == "windows" && !Within(filepath.Join(base, "X"), filepath.Dir(base)+`\AGENTSSH`) {
+	if runtime.GOOS == "windows" && !Within(filepath.Join(base, "X"), filepath.Dir(base)+`\OSTIARY`) {
 		t.Error("expected case-insensitive match on Windows")
 	}
 }

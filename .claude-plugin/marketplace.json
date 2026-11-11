@@ -1,14 +1,14 @@
 {
-  "name": "agentssh",
-  "description": "agentssh: SSH for AI coding agents with policy, approvals and audit.",
+  "name": "ostiary",
+  "description": "Ostiary: SSH for AI coding agents with policy, approvals and audit.",
   "owner": {
     "name": "ASromancer"
   },
   "plugins": [
     {
-      "name": "agentssh",
+      "name": "ostiary",
       "source": "./plugin",
-      "description": "SSH for Claude Code without exposing keys: policy, approvals, audit. Install the agentssh binary first.",
+      "description": "SSH for Claude Code without exposing keys: policy, approvals, audit. Install the ostiary binary first.",
       "version": "0.1.0"
     }
   ]

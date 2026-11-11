@@ -1,4 +1,4 @@
-// Package ui is agentssh's local web interface: approvals, hosts, vault and
+// Package ui is ostiary's local web interface: approvals, hosts, vault and
 // keys, log and status. It listens on 127.0.0.1 only. A single-use login nonce is
 // exchanged for an HttpOnly cookie, and Host and Origin are checked so
 // other web pages and other local users cannot drive it. Every change still
@@ -216,7 +216,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 		}
 		if r.Method == http.MethodGet && r.URL.Path == "/" && r.URL.Query().Has("n") {
 			if !s.useNonce(r.URL.Query().Get("n")) {
-				http.Error(w, "this link is no longer valid; open agentssh from 'agentssh ui' or the tray icon", http.StatusUnauthorized)
+				http.Error(w, "this link is no longer valid; open ostiary from 'ostiary ui' or the tray icon", http.StatusUnauthorized)
 				return
 			}
 			sid, err := s.newSession()
@@ -224,12 +224,12 @@ func (s *Server) guard(next http.Handler) http.Handler {
 				http.Error(w, "internal error", http.StatusInternalServerError)
 				return
 			}
-			http.SetCookie(w, &http.Cookie{Name: "agentssh", Value: sid, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
+			http.SetCookie(w, &http.Cookie{Name: "ostiary", Value: sid, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return
 		}
-		if c, err := r.Cookie("agentssh"); err != nil || !s.session(c.Value) {
-			http.Error(w, "open agentssh from 'agentssh ui' or the tray icon", http.StatusUnauthorized)
+		if c, err := r.Cookie("ostiary"); err != nil || !s.session(c.Value) {
+			http.Error(w, "open ostiary from 'ostiary ui' or the tray icon", http.StatusUnauthorized)
 			return
 		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {

@@ -31,7 +31,7 @@ func TestOldUnit(t *testing.T) {
 func TestDoctorChecksShape(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("AGENTSSH_SOCKET", filepath.Join(t.TempDir(), "none.sock"))
+	t.Setenv("OSTIARY_SOCKET", filepath.Join(t.TempDir(), "none.sock"))
 	checks := doctorChecks(false)
 	if len(checks) == 0 || checks[0].OK || !strings.Contains(checks[0].Text, "daemon is not running") {
 		t.Fatalf("%+v", checks)
@@ -49,7 +49,7 @@ func TestDetachArgs(t *testing.T) {
 
 func TestDialRetryWaits(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	t.Setenv("AGENTSSH_SOCKET", filepath.Join(t.TempDir(), "none.sock"))
+	t.Setenv("OSTIARY_SOCKET", filepath.Join(t.TempDir(), "none.sock"))
 	start := time.Now()
 	if _, err := dialRetry(0); err == nil || time.Since(start) > 150*time.Millisecond {
 		t.Fatalf("wait=0 must fail fast: %v", err)

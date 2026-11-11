@@ -8,12 +8,12 @@ import (
 	"os"
 )
 
-// Notify appends "title\tbody\tlink" to $AGENTSSH_E2E_NOTES, where the e2e test
+// Notify appends "title\tbody\tlink" to $OSTIARY_E2E_NOTES, where the e2e test
 // reads the codes. Test builds only, never in releases.
 func Notify(n Notice) error {
-	p := os.Getenv("AGENTSSH_E2E_NOTES")
+	p := os.Getenv("OSTIARY_E2E_NOTES")
 	if p == "" {
-		return errors.New("AGENTSSH_E2E_NOTES is not set")
+		return errors.New("OSTIARY_E2E_NOTES is not set")
 	}
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {

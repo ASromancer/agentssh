@@ -1,8 +1,8 @@
 package ui
 
 import (
-	"github.com/ASromancer/agentssh/internal/approval"
-	"github.com/ASromancer/agentssh/internal/daemon"
+	"github.com/ASromancer/ostiary/internal/approval"
+	"github.com/ASromancer/ostiary/internal/daemon"
 )
 
 // Backend is what the UI needs from the daemon. ServiceBackend calls the

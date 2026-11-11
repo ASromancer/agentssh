@@ -24,12 +24,12 @@ import (
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/ASromancer/agentssh/internal/approval"
-	"github.com/ASromancer/agentssh/internal/hosts"
-	"github.com/ASromancer/agentssh/internal/humanok"
-	"github.com/ASromancer/agentssh/internal/paths"
-	"github.com/ASromancer/agentssh/internal/sshconn"
-	"github.com/ASromancer/agentssh/internal/vault"
+	"github.com/ASromancer/ostiary/internal/approval"
+	"github.com/ASromancer/ostiary/internal/hosts"
+	"github.com/ASromancer/ostiary/internal/humanok"
+	"github.com/ASromancer/ostiary/internal/paths"
+	"github.com/ASromancer/ostiary/internal/sshconn"
+	"github.com/ASromancer/ostiary/internal/vault"
 )
 
 // testServer is a minimal SSH server that runs exec requests with sh -c
@@ -183,9 +183,9 @@ func setup(t *testing.T) *harness {
 	if runtime.GOOS == "windows" {
 		sockBase = ""
 	}
-	sockDir, _ := os.MkdirTemp(sockBase, "agentssh-test")
+	sockDir, _ := os.MkdirTemp(sockBase, "ostiary-test")
 	t.Cleanup(func() { os.RemoveAll(sockDir) })
-	t.Setenv("AGENTSSH_SOCKET", filepath.Join(sockDir, "s"))
+	t.Setenv("OSTIARY_SOCKET", filepath.Join(sockDir, "s"))
 
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	sshPub, _ := ssh.NewPublicKey(pub)
@@ -509,7 +509,7 @@ func TestOSAuth(t *testing.T) {
 }
 
 func TestDialogText(t *testing.T) {
-	const blank = "confirm an agentssh action"
+	const blank = "confirm an ostiary action"
 	pad := "[DESTRUCTIVE] approve on h: ls" + strings.Repeat(" ", 1500) + "; rm -rf ~"
 	got := dialogText(pad)
 	if got != "[DESTRUCTIVE] approve on h: ls ; rm -rf ~" {
@@ -588,7 +588,7 @@ func TestOSAuthBreaksDecide(t *testing.T) {
 	}
 	err := h.call("Decide", &DecideArgs{ID: r.Pending, Choice: "y"}, &Empty{})
 	if err == nil || !strings.Contains(err.Error(), "no polkit authentication agent") ||
-		!strings.Contains(err.Error(), "agentssh doctor") || !strings.Contains(err.Error(), "AGENTSSH_OS_AUTH=0") {
+		!strings.Contains(err.Error(), "ostiary doctor") || !strings.Contains(err.Error(), "OSTIARY_OS_AUTH=0") {
 		t.Fatalf("decide: %v", err)
 	}
 	var st StatusReply
@@ -622,7 +622,7 @@ func TestOSAuthBreaksAdmin(t *testing.T) {
 		t.Fatalf("expected OS mode: %+v", br)
 	}
 	err := h.call("Admin", &AdminArgs{Ticket: br.Ticket, Op: "key-gen", Name: "k9"}, &ar)
-	if err == nil || !strings.Contains(err.Error(), "AGENTSSH_OS_AUTH=0") {
+	if err == nil || !strings.Contains(err.Error(), "OSTIARY_OS_AUTH=0") {
 		t.Fatalf("admin: %v", err)
 	}
 	h.call("Begin", &BeginArgs{Op: "key-gen", Name: "k9"}, &br)
@@ -673,11 +673,11 @@ func TestOSAuthOff(t *testing.T) {
 		{"windows", "", false}, {"windows", "1", true}, {"windows", "yes", false},
 	} {
 		if why := osAuthOff(c.goos, c.env); (why == "") != c.on {
-			t.Errorf("%s AGENTSSH_OS_AUTH=%q: %q", c.goos, c.env, why)
+			t.Errorf("%s OSTIARY_OS_AUTH=%q: %q", c.goos, c.env, why)
 		}
 	}
 	if err := authOff(osAuthOff("darwin", "")).Available(); !errors.Is(err, humanok.ErrUnavailable) ||
-		!strings.Contains(err.Error(), "set AGENTSSH_OS_AUTH=1") {
+		!strings.Contains(err.Error(), "set OSTIARY_OS_AUTH=1") {
 		t.Fatalf("%v", err)
 	}
 }
@@ -719,9 +719,9 @@ func TestRunning(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		base = ""
 	}
-	dir, _ := os.MkdirTemp(base, "agentssh-run")
+	dir, _ := os.MkdirTemp(base, "ostiary-run")
 	t.Cleanup(func() { os.RemoveAll(dir) })
-	t.Setenv("AGENTSSH_SOCKET", filepath.Join(dir, "s"))
+	t.Setenv("OSTIARY_SOCKET", filepath.Join(dir, "s"))
 	if Running() {
 		t.Fatal("running with no socket")
 	}

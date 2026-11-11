@@ -4,9 +4,9 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/ASromancer/agentssh/internal/approval"
-	"github.com/ASromancer/agentssh/internal/daemon"
-	"github.com/ASromancer/agentssh/internal/hosts"
+	"github.com/ASromancer/ostiary/internal/approval"
+	"github.com/ASromancer/ostiary/internal/daemon"
+	"github.com/ASromancer/ostiary/internal/hosts"
 )
 
 type fakeBackend struct {

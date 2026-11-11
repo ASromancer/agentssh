@@ -12,9 +12,9 @@ import (
 // Title is the tooltip, with the number of requests waiting.
 func Title(n int) string {
 	if n == 0 {
-		return "agentssh"
+		return "Ostiary"
 	}
-	return fmt.Sprintf("agentssh: %d yêu cầu chờ duyệt", n)
+	return fmt.Sprintf("Ostiary: %d yêu cầu chờ duyệt", n)
 }
 
 // Icon returns the tray icon: PNG, wrapped as ICO on Windows. It is drawn

@@ -16,8 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ASromancer/agentssh/internal/humanok"
-	"github.com/ASromancer/agentssh/internal/policy"
+	"github.com/ASromancer/ostiary/internal/humanok"
+	"github.com/ASromancer/ostiary/internal/policy"
 )
 
 type Request struct {
@@ -130,13 +130,13 @@ func (q *Queue) Add(r Request) bool {
 	codes := q.codes()
 	body := fmt.Sprintf("%s: %s [%s] code: %s", r.Host, r.Cmd, r.Level, e.code)
 	if !codes {
-		body = fmt.Sprintf("%s: %s [%s] — open agentssh to approve", r.Host, r.Cmd, r.Level)
+		body = fmt.Sprintf("%s: %s [%s] — open ostiary to approve", r.Host, r.Cmd, r.Level)
 	}
 	link := ""
 	if q.Link != nil && !codes {
 		link = q.Link(r.ID)
 	}
-	err := q.Notify(Notice{Title: "agentssh approval #" + fmt.Sprint(r.ID), Body: body, Link: link})
+	err := q.Notify(Notice{Title: "ostiary approval #" + fmt.Sprint(r.ID), Body: body, Link: link})
 	if err != nil && codes {
 		e.req.Code = e.code
 	}
@@ -313,7 +313,7 @@ func (q *Queue) Ticket(op, detail string, data any) (id int, code string) {
 	if !q.codes() {
 		return id, ""
 	}
-	if err := q.Notify(Notice{Title: "agentssh", Body: body}); err != nil {
+	if err := q.Notify(Notice{Title: "Ostiary", Body: body}); err != nil {
 		return id, t.code
 	}
 	return id, ""
@@ -389,7 +389,7 @@ func Desktop(n Notice) error {
 		cmd = exec.Command(bin, "-NoProfile", "-NonInteractive", "-Command", windowsToast)
 	}
 	cmd.Env = append(notifyEnv(os.Environ(), runtime.GOOS),
-		"AGENTSSH_TITLE="+n.Title, "AGENTSSH_BODY="+n.Body, "AGENTSSH_LINK="+n.Link)
+		"OSTIARY_TITLE="+n.Title, "OSTIARY_BODY="+n.Body, "OSTIARY_LINK="+n.Link)
 	if runtime.GOOS == "linux" && n.Link != "" {
 		return waitForClick(cmd, n)
 	}
@@ -401,7 +401,7 @@ func Desktop(n Notice) error {
 }
 
 func linuxNotifyArgs(n Notice) []string {
-	args := []string{"-u", "critical", "-a", "agentssh"}
+	args := []string{"-u", "critical", "-a", "ostiary"}
 	if n.Link != "" {
 		args = append(args, "-A", "open=Mở", "--wait")
 	}
@@ -465,8 +465,8 @@ const windowsToast = `$ErrorActionPreference = 'Stop'
 [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
 $t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
 $x = $t.GetElementsByTagName('text')
-$x.Item(0).AppendChild($t.CreateTextNode($env:AGENTSSH_TITLE)) | Out-Null
-$x.Item(1).AppendChild($t.CreateTextNode($env:AGENTSSH_BODY)) | Out-Null
-if ($env:AGENTSSH_LINK) { $t.DocumentElement.SetAttribute('activationType', 'protocol'); $t.DocumentElement.SetAttribute('launch', $env:AGENTSSH_LINK) }
+$x.Item(0).AppendChild($t.CreateTextNode($env:OSTIARY_TITLE)) | Out-Null
+$x.Item(1).AppendChild($t.CreateTextNode($env:OSTIARY_BODY)) | Out-Null
+if ($env:OSTIARY_LINK) { $t.DocumentElement.SetAttribute('activationType', 'protocol'); $t.DocumentElement.SetAttribute('launch', $env:OSTIARY_LINK) }
 $app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
 [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show([Windows.UI.Notifications.ToastNotification]::new($t))`

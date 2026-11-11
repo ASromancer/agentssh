@@ -1,4 +1,4 @@
-/* agentssh UI. Tokens first; light-dark() follows the system theme unless
+/* ostiary UI. Tokens first; light-dark() follows the system theme unless
    <html data-theme="light|dark"> overrides color-scheme. */
 :root {
   color-scheme: light dark;

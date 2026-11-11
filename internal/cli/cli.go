@@ -1,4 +1,4 @@
-// Package cli implements the agentssh subcommands. Agent-facing commands
+// Package cli implements the ostiary subcommands. Agent-facing commands
 // are thin clients of the daemon; human commands need a real terminal.
 package cli
 
@@ -14,39 +14,39 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ASromancer/agentssh/internal/daemon"
+	"github.com/ASromancer/ostiary/internal/daemon"
 )
 
-const usage = `agentssh — SSH for AI agents with policy, approvals and audit.
+const usage = `ostiary — SSH for AI agents with policy, approvals and audit.
 
 For agents:
-  agentssh hosts [--json]
-  agentssh run <host> "<cmd>" [--timeout 60s] [--json]
-  agentssh out <id> [--grep <regexp>] [--range a:b]
-  agentssh get <host>:<remote-path> <local-path>
-  agentssh put <local-path> <host>:<remote-path>
-  agentssh job start <host> "<cmd>" | job tail <id> [--lines N] | job kill <id>
-  agentssh explain "<cmd>" [--host <host>]
-  agentssh mcp [--cwd <dir>]          stdio MCP server with the same tools
+  ostiary hosts [--json]
+  ostiary run <host> "<cmd>" [--timeout 60s] [--json]
+  ostiary out <id> [--grep <regexp>] [--range a:b]
+  ostiary get <host>:<remote-path> <local-path>
+  ostiary put <local-path> <host>:<remote-path>
+  ostiary job start <host> "<cmd>" | job tail <id> [--lines N] | job kill <id>
+  ostiary explain "<cmd>" [--host <host>]
+  ostiary mcp [--cwd <dir>]          stdio MCP server with the same tools
 
 For the human user (need a real terminal; approvals and admin commands are confirmed
 in an OS authentication dialog, or with a code from a desktop notification as a fallback):
-  agentssh init [--passphrase] | unlock | lock | approve | reload | doctor | ui | daemon | install-polkit | install-service
-  agentssh host add|edit|ls|rm|trust ...
-  agentssh key gen|import|export|ls|rm ...
-  agentssh log [--follow] [-n N]
-  agentssh install-hooks claude|codex|gemini|antigravity|all
+  ostiary init [--passphrase] | unlock | lock | approve | reload | doctor | ui | daemon | install-polkit | install-service
+  ostiary host add|edit|ls|rm|trust ...
+  ostiary key gen|import|export|ls|rm ...
+  ostiary log [--follow] [-n N]
+  ostiary install-hooks claude|codex|gemini|antigravity|all
 
 Exit codes: the remote command's own code, or
   100 blocked by policy, 101 denied / approval timed out, 102 daemon not running or vault locked.
-Only errors produced by agentssh itself print a stderr line starting with "agentssh:".
+Only errors produced by ostiary itself print a stderr line starting with "ostiary:".
 `
 
 // Version is set at release time with -ldflags "-X .../internal/cli.Version=x.y.z".
 var Version = "dev"
 
 func init() {
-	// go install github.com/ASromancer/agentssh@vX stamps the module version.
+	// go install github.com/ASromancer/ostiary@vX stamps the module version.
 	if bi, ok := debug.ReadBuildInfo(); ok && Version == "dev" && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
 		Version = strings.TrimPrefix(bi.Main.Version, "v")
 	}
@@ -55,7 +55,7 @@ func init() {
 var guidance = map[int]string{
 	daemon.CodeBlocked:  "blocked by policy: do not retry another way; tell the user what you wanted to do",
 	daemon.CodeDenied:   "stop and ask the user; do not retry another way",
-	daemon.CodeNoDaemon: "ask the user to start or unlock agentssh",
+	daemon.CodeNoDaemon: "ask the user to start or unlock ostiary",
 }
 
 // Main runs a subcommand and returns the process exit code.
@@ -70,7 +70,7 @@ func Main(args []string) int {
 		"init": cmdInit, "unlock": cmdUnlock, "lock": cmdLock, "approve": cmdApprove,
 		"reload": cmdReload, "host": cmdHost, "key": cmdKey, "log": cmdLog, "doctor": cmdDoctor, "ui": cmdUI,
 		"install-hooks": cmdInstallHooks, "daemon": cmdDaemon, "install-polkit": cmdInstallPolkit, "install-service": cmdInstallService, "mcp": cmdMCP,
-		"version": func([]string) int { fmt.Println("agentssh", Version); return 0 },
+		"version": func([]string) int { fmt.Println("ostiary", Version); return 0 },
 	}
 	if f, ok := cmds[args[0]]; ok {
 		return f(args[1:])
@@ -79,17 +79,17 @@ func Main(args []string) int {
 		fmt.Print(usage)
 		return 0
 	}
-	return errf(2, "unknown command %q; see 'agentssh help'", args[0])
+	return errf(2, "unknown command %q; see 'ostiary help'", args[0])
 }
 
 func errf(code int, format string, a ...any) int {
-	fmt.Fprintf(os.Stderr, "agentssh: "+format+"\n", a...)
+	fmt.Fprintf(os.Stderr, "ostiary: "+format+"\n", a...)
 	return code
 }
 
-// agentFail prints an agentssh-specific error with guidance for the agent.
+// agentFail prints an ostiary-specific error with guidance for the agent.
 func agentFail(code int, msg string) int {
-	fmt.Fprintf(os.Stderr, "agentssh: %s\nagentssh: %s\n", msg, guidance[code])
+	fmt.Fprintf(os.Stderr, "ostiary: %s\nostiary: %s\n", msg, guidance[code])
 	return code
 }
 
@@ -97,7 +97,7 @@ func dial() (*rpc.Client, int) {
 	// a short retry covers the window right after the daemon (re)starts
 	c, err := dialRetry(2 * time.Second)
 	if err != nil {
-		return nil, agentFail(daemon.CodeNoDaemon, "daemon is not running (systemctl --user start agentssh, or 'agentssh daemon --detach')")
+		return nil, agentFail(daemon.CodeNoDaemon, "daemon is not running (systemctl --user start ostiary, or 'ostiary daemon --detach')")
 	}
 	return c, 0
 }
@@ -144,7 +144,7 @@ func parse(fs *flag.FlagSet, args []string) ([]string, error) {
 }
 
 func newFlags(name string) *flag.FlagSet {
-	fs := flag.NewFlagSet("agentssh "+name, flag.ContinueOnError)
+	fs := flag.NewFlagSet("ostiary "+name, flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	return fs
 }

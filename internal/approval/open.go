@@ -9,7 +9,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/ASromancer/agentssh/internal/humanok"
+	"github.com/ASromancer/ostiary/internal/humanok"
 )
 
 // LocalURL reports whether u is a plain http URL on this machine's

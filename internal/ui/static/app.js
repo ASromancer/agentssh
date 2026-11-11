@@ -1,5 +1,5 @@
 "use strict";
-// agentssh UI (vanilla JS, no build). All text from the daemon (commands,
+// ostiary UI (vanilla JS, no build). All text from the daemon (commands,
 // notes, host names, audit fields) is agent-controlled: it enters the page
 // only through textContent / text nodes, never as HTML.
 
@@ -283,13 +283,13 @@ function applyTheme(t) {
 }
 (() => {
   let saved = null;
-  try { saved = localStorage.getItem("agentssh-theme"); } catch (e) { /* storage blocked */ }
+  try { saved = localStorage.getItem("ostiary-theme"); } catch (e) { /* storage blocked */ }
   applyTheme(saved === "light" || saved === "dark" ? saved : null);
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => applyTheme(document.documentElement.dataset.theme || null));
   $("theme").addEventListener("click", () => {
     const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
     const next = dark ? "light" : "dark";
-    try { localStorage.setItem("agentssh-theme", next); } catch (e) { /* ignore */ }
+    try { localStorage.setItem("ostiary-theme", next); } catch (e) { /* ignore */ }
     applyTheme(next);
   });
 })();
@@ -326,7 +326,7 @@ async function loadStatus() {
   vs.replaceChildren(icon(status.Locked ? "lock" : "unlock"), document.createTextNode(status.Locked ? "Vault đang khóa" : "Vault đang mở"));
   const n = status.Pending ? String(status.Pending) : "";
   $("pendingcount").textContent = n;
-  document.title = (n ? "(" + n + ") " : "") + "agentssh";
+  document.title = (n ? "(" + n + ") " : "") + "ostiary";
   $("configwarn").classList.toggle("hidden", !status.UserOnly);
 }
 async function toggleVault() {
@@ -599,12 +599,12 @@ function initials(name) {
 }
 const addrOf = (h) => (h.user ? h.user + "@" : "") + h.host + ":" + (h.port || 22);
 let hostMode = "grid";
-try { hostMode = localStorage.getItem("agentssh-hostview") === "list" ? "list" : "grid"; } catch (e) { /* ignore */ }
+try { hostMode = localStorage.getItem("ostiary-hostview") === "list" ? "list" : "grid"; } catch (e) { /* ignore */ }
 document.querySelectorAll('input[name="hostview"]').forEach((r) => {
   r.checked = r.value === hostMode;
   r.addEventListener("change", () => {
     hostMode = r.value;
-    try { localStorage.setItem("agentssh-hostview", hostMode); } catch (e) { /* ignore */ }
+    try { localStorage.setItem("ostiary-hostview", hostMode); } catch (e) { /* ignore */ }
     renderHosts();
   });
 });
@@ -1022,7 +1022,7 @@ function renderKnownHosts() {
   const wrap = el("div", "tablewrap");
   const t = el("table");
   const hr = el("tr");
-  ["Host", "Loại", "Fingerprint", "Host agentssh", ""].forEach((h) => hr.appendChild(el("th", null, h)));
+  ["Host", "Loại", "Fingerprint", "Host ostiary", ""].forEach((h) => hr.appendChild(el("th", null, h)));
   t.appendChild(el("thead")).appendChild(hr);
   const tb = el("tbody");
   rows.forEach((k) => {
@@ -1160,7 +1160,7 @@ let sseErrors = 0;
 let esOpened = false;
 es.onopen = () => { conn(true); if (esOpened) refresh(); esOpened = true; }; // resync what a drop missed
 es.addEventListener("update", () => { sseErrors = 0; conn(true); refresh(); });
-es.onerror = () => { conn(false); if (++sseErrors === 3) toast("Mất kết nối tới daemon agentssh", "error"); };
+es.onerror = () => { conn(false); if (++sseErrors === 3) toast("Mất kết nối tới daemon ostiary", "error"); };
 function route() { // #req=N focuses a request; #hosts, #keychain... deep-link a view
   const h = location.hash.slice(1);
   showView(Object.hasOwn(VIEWS, h) ? h : "approvals");

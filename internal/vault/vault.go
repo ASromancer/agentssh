@@ -79,7 +79,7 @@ func Save(path string, key *[32]byte, salt []byte, d *Data) error {
 
 func header(b []byte) (salt, nonceAndBox []byte, err error) {
 	if len(b) < len(magic)+1 || string(b[:len(magic)]) != magic {
-		return nil, nil, errors.New("vault: not an agentssh vault")
+		return nil, nil, errors.New("vault: not an ostiary vault")
 	}
 	n := int(b[len(magic)])
 	rest := b[len(magic)+1:]
@@ -147,7 +147,7 @@ func (d *Data) Wipe() {
 	}
 }
 
-const keyringService, keyringUser = "agentssh", "master-key"
+const keyringService, keyringUser = "ostiary", "master-key"
 
 // keyringTimeout bounds OS keyring calls: a locked macOS Keychain or a
 // D-Bus Secret Service that never answers must not hang init or the daemon.

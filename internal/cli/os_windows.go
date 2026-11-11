@@ -9,7 +9,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	"github.com/ASromancer/agentssh/internal/paths"
+	"github.com/ASromancer/ostiary/internal/paths"
 )
 
 func openConsole() (in, out *os.File, err error) {
@@ -33,7 +33,7 @@ func echoOff(in *os.File) (restore func()) {
 	return func() { _ = windows.SetConsoleMode(h, mode) }
 }
 
-// startDetached runs "agentssh daemon" without a console window.
+// startDetached runs "ostiary daemon" without a console window.
 func startDetached(logPath string, extra []string) error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -60,12 +60,12 @@ func installService() error {
 	}
 	tr := fmt.Sprintf(`"%s" daemon --detach`, exe)
 	if out, err := exec.Command("schtasks", "/Create", "/F", "/SC", "ONLOGON", "/RL", "LIMITED",
-		"/TN", "agentssh", "/TR", tr).CombinedOutput(); err != nil {
+		"/TN", "ostiary", "/TR", tr).CombinedOutput(); err != nil {
 		return fmt.Errorf("schtasks: %v: %s", err, out)
 	}
 	if err := startDetached(filepath.Join(paths.State(), "daemon.log"), nil); err != nil {
 		return err
 	}
-	fmt.Println("logon task 'agentssh' installed")
+	fmt.Println("logon task 'ostiary' installed")
 	return nil
 }

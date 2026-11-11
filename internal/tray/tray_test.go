@@ -8,7 +8,7 @@ import (
 )
 
 func TestTitle(t *testing.T) {
-	if Title(0) != "agentssh" || Title(3) != "agentssh: 3 yêu cầu chờ duyệt" {
+	if Title(0) != "Ostiary" || Title(3) != "Ostiary: 3 yêu cầu chờ duyệt" {
 		t.Fatalf("%q %q", Title(0), Title(3))
 	}
 }
