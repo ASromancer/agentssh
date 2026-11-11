@@ -71,7 +71,7 @@ If agentssh itself produced the exit code, it also prints a stderr line starting
 | Gemini CLI (legacy) | `agentssh install-hooks gemini` | skill in `~/.agents/skills`, `BeforeTool` hook, `policies/agentssh.toml` |
 | Any MCP client | see below | the same tools over MCP |
 
-`agentssh install-hooks all` installs for every agent it detects. All of them install the binary's absolute path as the hook command, so the binary has to stay where it is.
+`agentssh install-hooks all` installs for every agent it detects. All of them install the binary's absolute path as the hook command, so the binary has to stay where it is. The hooks are a soft layer that a same-user agent can work around; see the [threat model](#threat-model--read-this).
 
 Only Claude Code's hook can ask you in chat before a `mutate` command on a `standard` host. Codex and Gemini hooks have no "ask", and MCP has no hooks at all. For those agents (and any caller that isn't Claude Code), the daemon sends `mutate` commands on `standard` hosts through the same out-of-band approval as `destructive` ones. To skip that, use the `full` profile or `allow` patterns.
 
@@ -136,7 +136,7 @@ The daemon reads `hosts.toml` and `rules.toml` only at startup and on `agentssh 
 
 Approvals and admin operations (key generation, host edits, ...) are confirmed through your operating system's authentication dialog, opened by the daemon itself:
 
-- **Linux (on by default):** polkit (password prompt). Run `sudo agentssh install-polkit` once from your own account, then `systemctl --user restart agentssh`. It needs a local graphical session (a forwarded X display does not count).
+- **Linux (on by default):** polkit (password prompt). Run `sudo agentssh install-polkit` once from your own account, then `systemctl --user restart agentssh`. It needs a local graphical session (a forwarded X display does not count); the user service starts with that session (`graphical-session.target`).
 - **macOS (off by default):** Touch ID, or your macOS password.
 - **Windows (off by default):** your Windows password.
 
@@ -156,7 +156,7 @@ When the agent runs something destructive:
 
    For `y`, `s` and `m` the OS dialog appears and shows the request number, host and command (and your message for `m`); cancelling it leaves the request pending. Denials (`n`) need no authentication. Only one dialog is open at a time.
 
-**Fallback: codes.** Without OS authentication (turned off, no local graphical session, polkit action missing or installed for another user), the notification carries a 4-character code that you type after choosing. Three wrong codes deny the request. If the OS dialog fails to appear (for example, the polkit agent is gone), the daemon switches to codes until it restarts and sends a code for every pending request; `approve` asks you to choose again and enter it, and an admin command asks you to run it again. `agentssh doctor` shows which mode is active.
+**Fallback: codes.** Without OS authentication (turned off, no local graphical session, polkit action missing or installed for another user), the notification carries a 4-character code that you type after choosing. Three wrong codes deny the request. A daemon that started in OS mode never switches to codes by itself (see above). `agentssh doctor` shows which mode is active.
 
 ## Threat model — read this
 
@@ -169,11 +169,11 @@ When the agent runs something destructive:
 - **Hardened mode (planned for V1.1):** the daemon runs as a separate system user, so agents cannot read the vault, the config or the daemon's memory. This is a real security boundary.
 - Approvals and admin operations are confirmed through the operating system's authentication dialog, triggered by the daemon itself; a caller of the daemon (including an agent) cannot complete them without the human passing that dialog. **Authenticate only dialogs you started yourself**, and check that the request number and command match what `approve` shows: an agent can start a dialog too, and authenticating it approves what it names.
 - The mode is chosen when the daemon starts (and on an approved `agentssh reload`); agentssh never falls back to codes on its own. A dialog that is cancelled, times out or cannot be shown is a refusal, and the request stays pending.
-- System helpers (`pkcheck`, `notify-send`, `osascript`, `powershell`) are run from fixed paths that must be owned by root and not writable by others (on Windows: under System32), never looked up in `PATH`. Without a trusted notifier, codes are shown in the terminal.
-- Restarting the daemon with `AGENTSSH_OS_AUTH=0` is a deliberate human action; the agent hooks block `agentssh daemon`, shell commands that mention `AGENTSSH_OS_AUTH` or `agentssh.service`, and `systemctl`/`kill`/`pkill`/`killall` aimed at agentssh. An approved `agentssh reload` can switch codes to OS authentication, never the other way.
+- System helpers (`pkcheck`, `notify-send`, `osascript`, `powershell`) are run from fixed paths that must be owned by root and not writable by others (on Windows: under System32), never looked up in `PATH`. `pkcheck` runs with an empty environment and notifiers with a short allowlist (session bus, display, `HOME`, locale), so variables such as `LD_PRELOAD` set in the daemon's environment never reach them. Without a trusted notifier, codes are shown in the terminal.
+- Restarting the daemon with `AGENTSSH_OS_AUTH=0` is a deliberate human action. On a best-effort basis, the agent hooks deny `agentssh daemon`; shell commands that mention `AGENTSSH_OS_AUTH` or `agentssh.service`; `systemctl`/`launchctl`/`kill`/`pkill`/`killall` commands whose text mentions agentssh (including `kill $(pgrep agentssh)`); `systemctl --user` `set-environment`, `unset-environment`, `import-environment`, `daemon-reload`, `edit` and `revert`; `launchctl` `setenv`, `unsetenv`, `kickstart`, `bootout`, `load` and `unload`; and edits to the agentssh unit and its drop-ins, `~/.config/environment.d` and the launch agent plist. An approved `agentssh reload` can switch codes to OS authentication, never the other way.
 - Code mode uses codes from desktop notifications, which a same-user process could read. In code mode, when a notification cannot be sent, the code is shown in the terminal and is also exposed to any process of your user that calls the daemon's socket. `agentssh doctor` shows which mode is active.
 - Locking a keyring-mode vault (`agentssh lock`) is not a security boundary against processes of your user: they can read the master key from the OS keyring themselves.
-- **Agent hooks are a soft layer.** They deny direct `ssh`/`scp`/`rsync`, deny human-only `agentssh` subcommands, and keep agents out of agentssh's own files. In Claude Code they also ask you before `mutate` commands. The daemon enforces forbidden commands, profiles and approvals whether or not a hook is installed.
+- **Agent hooks are a soft layer.** They deny direct `ssh`/`scp`/`rsync`, deny human-only `agentssh` subcommands, and keep agents out of agentssh's own files. In Claude Code they also ask you before `mutate` commands. The daemon enforces forbidden commands, profiles and approvals whether or not a hook is installed. A same-user agent can work around the hooks: it can edit its own agent settings to remove them, restart the daemon with an altered environment by a route the hooks do not recognize, or replace the agentssh binary. OS authentication raises the bar, but it is not a boundary against a process running as your user. The real boundary is hardened mode (planned for V1.1).
 - **The agent name is self-reported.** The CLI derives it from environment variables such as `CLAUDECODE`, `CODEX_*` and `GEMINI_CLI`, so a caller can claim to be Claude Code. That only affects whether a `mutate` command on a `standard` host gets an in-chat ask or an out-of-band approval. It never bypasses forbidden commands or destructive approvals.
 - **Classification is best-effort static analysis.** It handles quoting, escapes, wrappers, nested shells, globs on sensitive paths and dynamic command names; dynamic or unknown constructs are classified upward. Interpreters such as `python -c` count as plain `mutate`.
 
