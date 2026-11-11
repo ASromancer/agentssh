@@ -34,12 +34,12 @@ func echoOff(in *os.File) (restore func()) {
 }
 
 // startDetached runs "agentssh daemon" without a console window.
-func startDetached(logPath string) error {
+func startDetached(logPath string, extra []string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	c := exec.Command(exe, "daemon", "--log", logPath)
+	c := exec.Command(exe, append([]string{"daemon", "--log", logPath}, extra...)...)
 	c.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,
 		CreationFlags: windows.CREATE_NO_WINDOW | windows.CREATE_NEW_PROCESS_GROUP,
@@ -63,7 +63,7 @@ func installService() error {
 		"/TN", "agentssh", "/TR", tr).CombinedOutput(); err != nil {
 		return fmt.Errorf("schtasks: %v: %s", err, out)
 	}
-	if err := startDetached(filepath.Join(paths.State(), "daemon.log")); err != nil {
+	if err := startDetached(filepath.Join(paths.State(), "daemon.log"), nil); err != nil {
 		return err
 	}
 	fmt.Println("logon task 'agentssh' installed")

@@ -27,12 +27,12 @@ func echoOff(in *os.File) (restore func()) {
 }
 
 // startDetached runs "agentssh daemon" in its own session, logging to logPath.
-func startDetached(logPath string) error {
+func startDetached(logPath string, extra []string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	c := exec.Command(exe, "daemon", "--log", logPath)
+	c := exec.Command(exe, append([]string{"daemon", "--log", logPath}, extra...)...)
 	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := c.Start(); err != nil {
 		return err
