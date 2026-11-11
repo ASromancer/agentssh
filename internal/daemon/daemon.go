@@ -69,6 +69,7 @@ type Daemon struct {
 	release     *update.Release
 	respawn     func(oldPid int) error
 	restartCode atomic.Int32
+	managedFn   func() bool // tests only
 	restarting  atomic.Bool // a successor takes over the socket: do not remove it
 }
 
@@ -352,7 +353,9 @@ func (d *Daemon) Serve(ln net.Listener) error {
 			time.Sleep(time.Hour)
 		}
 	}()
-	go d.updateLoop()
+	uctx, stopUpdates := context.WithCancel(context.Background())
+	defer stopUpdates()
+	go d.updateLoop(uctx)
 	log.Printf("ostiary daemon listening on %s", sock)
 	err := d.ServeListener(ln)
 	if !d.restarting.Load() {

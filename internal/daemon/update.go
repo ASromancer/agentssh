@@ -49,8 +49,8 @@ func (d *Daemon) updateBase() string {
 }
 
 // checkUpdate looks up the latest release and records it in Status. It never installs.
-func (d *Daemon) checkUpdate() {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+func (d *Daemon) checkUpdate(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	r, err := update.Latest(ctx, d.updateBase(), d.version)
 	if err != nil {
@@ -70,38 +70,72 @@ func (d *Daemon) checkUpdate() {
 	d.update, d.release = u, r
 }
 
-// updateLoop: first check 1 minute after start, then every 24 hours.
-func (d *Daemon) updateLoop() {
+// updateLoop: first check 1 minute after start, then every 24 hours, until ctx ends.
+func (d *Daemon) updateLoop(ctx context.Context) {
 	if d.version == "" || !updateCheckEnabled(os.Getenv) {
 		return
 	}
 	for t := time.Minute; ; t = 24 * time.Hour {
-		time.Sleep(t)
-		d.checkUpdate()
-	}
-}
-
-// managedRestart: systemd or launchd will start us again after exit 75.
-func managedRestart(env func(string) string) bool {
-	return env("INVOCATION_ID") != "" || strings.Contains(env("XPC_SERVICE_NAME"), "dev.ostiary")
-}
-
-// restart stops this daemon so that a new one (the updated binary) takes over.
-func (d *Daemon) restart() {
-	if managedRestart(os.Getenv) {
-		d.restartCode.Store(ExitRestart)
-	} else if d.respawn != nil {
-		if err := d.respawn(os.Getpid()); err != nil {
-			log.Printf("restart: %v (start the daemon again by hand)", err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(t):
+			d.checkUpdate(ctx)
 		}
 	}
-	d.restarting.Store(true)
-	d.mu.Lock()
-	ln := d.ln
-	d.mu.Unlock()
-	if ln != nil {
-		ln.Close()
+}
+
+// managedRestart: the service manager will start us again after exit 75. An inherited
+// INVOCATION_ID / XPC_SERVICE_NAME alone is not enough: the parent must be the manager.
+func managedRestart(goos string, env func(string) string, ppid int, comm func(int) string) bool {
+	switch goos {
+	case "linux":
+		return env("INVOCATION_ID") != "" && comm(ppid) == "systemd"
+	case "darwin":
+		return strings.Contains(env("XPC_SERVICE_NAME"), "dev.ostiary") && ppid == 1
 	}
+	return false
+}
+
+func procComm(pid int) string {
+	b, _ := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
+	return strings.TrimSpace(string(b))
+}
+
+func (d *Daemon) managed() bool {
+	if d.managedFn != nil {
+		return d.managedFn()
+	}
+	return managedRestart(runtime.GOOS, os.Getenv, os.Getppid(), procComm)
+}
+
+// restart makes a new daemon take over, then stops this one after delay. If the successor
+// cannot be started it keeps serving and says so.
+func (d *Daemon) restart(delay time.Duration) error {
+	if !d.restarting.CompareAndSwap(false, true) {
+		return errors.New("restart already in progress")
+	}
+	if d.managed() {
+		d.restartCode.Store(ExitRestart)
+	} else {
+		err := errors.New("no way to start a successor")
+		if d.respawn != nil {
+			err = d.respawn(os.Getpid())
+		}
+		if err != nil {
+			d.restarting.Store(false)
+			return fmt.Errorf("the new version is installed but the daemon could not restart (%v); restart Ostiary manually", err)
+		}
+	}
+	time.AfterFunc(delay, func() {
+		d.mu.Lock()
+		ln := d.ln
+		d.mu.Unlock()
+		if ln != nil {
+			ln.Close()
+		}
+	})
+	return nil
 }
 
 // WaitForPredecessor blocks until the old daemon has released the socket (at most 10 s).
@@ -115,8 +149,7 @@ func WaitForPredecessor() {
 // Restart replies, then restarts the daemon (used by 'ostiary upgrade' after installing).
 func (s *Service) Restart(_ *Empty, _ *Empty) error {
 	s.d.log.Write(audit.Entry{Kind: "admin", Cmd: "restart", Decision: "allow"})
-	time.AfterFunc(200*time.Millisecond, s.d.restart)
-	return nil
+	return s.d.restart(200 * time.Millisecond)
 }
 
 // upgrade runs the approved "upgrade" admin op.
@@ -135,7 +168,12 @@ func (d *Daemon) upgrade(version string, r *AdminReply) error {
 		return err
 	}
 	r.Out = msg
-	time.AfterFunc(time.Second, d.restart)
+	d.mu.Lock()
+	d.update, d.release = nil, nil // installed: a second approval must not re-apply it
+	d.mu.Unlock()
+	if err := d.restart(time.Second); err != nil {
+		r.Out += "; " + err.Error()
+	}
 	return nil
 }
 

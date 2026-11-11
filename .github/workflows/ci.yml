@@ -82,7 +82,7 @@ jobs:
       - name: release binaries contain no e2e test hooks
         run: |
           for f in build/linux-*/ostiary build/windows-*/*.exe; do
-            n=$(grep -a -c -e OSTIARY_E2E_HUMANOK -e OSTIARY_E2E_NOTES "$f" || true)
+            n=$(grep -a -c -e OSTIARY_E2E "$f" || true)
             echo "$f: $n"; [ "$n" = 0 ]
           done
       - uses: actions/upload-artifact@v4
@@ -121,7 +121,9 @@ jobs:
         run: |
           go run ./tools/brandgen -out build/brand
           mkdir -p dist
-          sh packaging/macos/build-app.sh "$VERSION" build/ostiary-universal build/brand/ostiary.icns dist
+          mkdir -p build/mac
+          sh packaging/macos/build-app.sh "$VERSION" build/ostiary-universal build/brand/ostiary.icns build/mac
+          cp build/mac/Ostiary-"$VERSION".dmg dist/
       - name: smoke-test dmg
         run: |
           hdiutil attach -nobrowse -mountpoint /tmp/ost dist/Ostiary-*.dmg
@@ -136,7 +138,7 @@ jobs:
       - name: release binaries contain no e2e test hooks
         run: |
           for f in build/ostiary-universal build/ostiary-darwin-*; do
-            n=$(grep -a -c -e OSTIARY_E2E_HUMANOK -e OSTIARY_E2E_NOTES "$f" || true)
+            n=$(grep -a -c -e OSTIARY_E2E "$f" || true)
             echo "$f: $n"; [ "$n" = 0 ]
           done
       - uses: actions/upload-artifact@v4
