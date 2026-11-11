@@ -125,7 +125,7 @@ func (q *Queue) Add(r Request) bool {
 	q.mu.Lock()
 	q.pending[r.ID] = e
 	q.mu.Unlock()
-	time.AfterFunc(q.Timeout, func() { q.finish(r.ID, Decision{Outcome: "timeout"}) })
+	time.AfterFunc(q.Timeout, func() { _ = q.finish(r.ID, Decision{Outcome: "timeout"}) })
 	time.AfterFunc(q.Timeout+time.Minute, func() { // nobody waited for it
 		q.mu.Lock()
 		delete(q.pending, r.ID)
@@ -134,18 +134,21 @@ func (q *Queue) Add(r Request) bool {
 	return err == nil
 }
 
-func (q *Queue) finish(id int, d Decision) {
+// finish records d as the decision for id. It returns false, and changes
+// nothing, when the request is unknown or already decided.
+func (q *Queue) finish(id int, d Decision) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	e, ok := q.pending[id]
 	if !ok || e.decided {
-		return
+		return false
 	}
 	e.decided = true
 	if d.Sticky {
 		q.sticky[stickyKey(e.req.Host, e.req.Cmd)] = time.Now().Add(StickyFor)
 	}
 	e.done <- d
+	return true
 }
 
 // Wait blocks until request id is decided or times out. ok=false means the
@@ -206,7 +209,7 @@ func (q *Queue) Decide(id int, code, choice, msg string) (Decision, error) {
 		left := maxTries - e.tries
 		q.mu.Unlock()
 		if left <= 0 {
-			q.finish(id, Decision{Outcome: "denied", Message: "wrong approval code entered 3 times"})
+			_ = q.finish(id, Decision{Outcome: "denied", Message: "wrong approval code entered 3 times"})
 			return Decision{}, fmt.Errorf("%w: request denied after %d wrong codes", ErrBadCode, maxTries)
 		}
 		return Decision{}, fmt.Errorf("%w: %d tries left", ErrBadCode, left)
@@ -218,6 +221,11 @@ func (q *Queue) Decide(id int, code, choice, msg string) (Decision, error) {
 // Resolve applies a decision whose human proof was already checked by the
 // caller (OS authentication), or that needs none (denials).
 func (q *Queue) Resolve(id int, choice, msg, auth string) (Decision, error) {
+	switch auth {
+	case "code", "os", "none":
+	default:
+		return Decision{}, fmt.Errorf("unknown auth %q", auth)
+	}
 	q.mu.Lock()
 	e, ok := q.pending[id]
 	decided := ok && e.decided
@@ -241,7 +249,9 @@ func (q *Queue) Resolve(id int, choice, msg, auth string) (Decision, error) {
 	if d.OK && !d.CodeOK {
 		return Decision{}, errors.New("approval needs a code or OS authentication")
 	}
-	q.finish(id, d)
+	if !q.finish(id, d) {
+		return Decision{}, fmt.Errorf("request #%d was already decided", id)
+	}
 	return d, nil
 }
 

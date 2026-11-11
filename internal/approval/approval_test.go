@@ -3,6 +3,7 @@ package approval
 import (
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -154,5 +155,70 @@ func TestTakeTicket(t *testing.T) {
 	}
 	if _, err := q.Take(id, "key-rm a"); err == nil {
 		t.Fatal("ticket reused")
+	}
+}
+
+func TestResolveApprovalNeedsAuth(t *testing.T) {
+	q := NewQueue((&sink{}).notify, time.Minute)
+	q.Add(Request{ID: 20, Host: "web1", Cmd: "rm x"})
+	if _, err := q.Resolve(20, "y", "", "none"); err == nil {
+		t.Fatal("approval accepted without auth")
+	}
+	if _, ok := q.Get(20); !ok {
+		t.Fatal("request no longer pending after rejected approval")
+	}
+}
+
+func TestResolveDenyWithoutAuth(t *testing.T) {
+	q := NewQueue((&sink{}).notify, time.Minute)
+	q.Add(Request{ID: 21})
+	if _, err := q.Resolve(21, "n", "", "none"); err != nil {
+		t.Fatal(err)
+	}
+	if _, d, _ := q.Wait(21); d.OK || d.Outcome != "denied" || d.Auth != "none" {
+		t.Fatalf("%+v", d)
+	}
+}
+
+func TestResolveUnknownAuth(t *testing.T) {
+	q := NewQueue((&sink{}).notify, time.Minute)
+	q.Add(Request{ID: 22})
+	if _, err := q.Resolve(22, "n", "", "password"); err == nil {
+		t.Fatal("unknown auth accepted")
+	}
+	if _, ok := q.Get(22); !ok {
+		t.Fatal("request decided by rejected call")
+	}
+}
+
+func TestResolveAfterTimeout(t *testing.T) {
+	q := NewQueue((&sink{}).notify, 10*time.Millisecond)
+	q.Add(Request{ID: 23})
+	time.Sleep(30 * time.Millisecond)
+	if _, err := q.Resolve(23, "y", "", "os"); err == nil {
+		t.Fatal("resolved after timeout")
+	}
+	if _, d, _ := q.Wait(23); d.OK || d.Outcome != "timeout" {
+		t.Fatalf("%+v", d)
+	}
+}
+
+func TestResolveRacingDecisions(t *testing.T) {
+	for i := 0; i < 200; i++ {
+		q := NewQueue((&sink{}).notify, time.Minute)
+		q.Add(Request{ID: 30})
+		var wg sync.WaitGroup
+		errs := make([]error, 2)
+		for j, c := range []string{"y", "n"} {
+			wg.Add(1)
+			go func(j int, c string) {
+				defer wg.Done()
+				_, errs[j] = q.Resolve(30, c, "", "os")
+			}(j, c)
+		}
+		wg.Wait()
+		if (errs[0] == nil) == (errs[1] == nil) {
+			t.Fatalf("iteration %d: want exactly one winner, got %v / %v", i, errs[0], errs[1])
+		}
 	}
 }
