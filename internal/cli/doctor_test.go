@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestOldUnit(t *testing.T) {
@@ -43,5 +44,18 @@ func TestDetachArgs(t *testing.T) {
 	}
 	if got := strings.Join(detachArgs(true, true, 8080), " "); got != "--no-ui --no-tray --ui-port 8080" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestDialRetryWaits(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("AGENTSSH_SOCKET", filepath.Join(t.TempDir(), "none.sock"))
+	start := time.Now()
+	if _, err := dialRetry(0); err == nil || time.Since(start) > 150*time.Millisecond {
+		t.Fatalf("wait=0 must fail fast: %v", err)
+	}
+	start = time.Now()
+	if _, err := dialRetry(600 * time.Millisecond); err == nil || time.Since(start) < 300*time.Millisecond {
+		t.Fatalf("should retry: %v %v", err, time.Since(start))
 	}
 }

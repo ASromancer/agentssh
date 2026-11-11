@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -191,4 +192,16 @@ func TestEvents(t *testing.T) {
 	f.pending = []approval.Request{{ID: 8}}
 	f.mu.Unlock()
 	expect("event: update") // new pending request
+}
+
+func TestReadAuditSkipsHugeLineInMiddle(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "audit.jsonl")
+	line := func(id int, cmd string) string {
+		return fmt.Sprintf(`{"time":"2026-11-11T1%d:00:00Z","id":%d,"kind":"run","cmd":%q,"decision":"allow"}`, id, id, cmd)
+	}
+	os.WriteFile(f, []byte(line(1, "a")+"\n"+line(2, strings.Repeat("x", 6<<20))+"\n"+line(3, "c")+"\n"+line(4, "d")), 0o600)
+	got, total, err := readAudit(f, "", "", "", 10, 0)
+	if err != nil || total != 3 || got[0].ID != 4 || got[2].ID != 1 {
+		t.Fatalf("%v %d %+v", err, total, got)
+	}
 }

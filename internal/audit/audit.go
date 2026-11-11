@@ -47,6 +47,7 @@ func clip(s string) string {
 
 func (l *Log) Write(e Entry) error {
 	e.Cmd, e.Note = clip(e.Cmd), clip(e.Note)
+	e.Agent, e.Cwd, e.Repo, e.Host = clip(e.Agent), clip(e.Cwd), clip(e.Repo), clip(e.Host)
 	if e.Time.IsZero() {
 		e.Time = time.Now()
 	}

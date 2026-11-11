@@ -207,6 +207,28 @@ func normalizeKey(b []byte, passphrase, name string) ([]byte, error) {
 	return pem.EncodeToMemory(block), nil
 }
 
+// readLine returns the next line (with its newline), or nil if it is longer
+// than max; an over-long line is discarded as it is read, never buffered.
+func readLine(br *bufio.Reader, max int) ([]byte, error) {
+	var line []byte
+	for {
+		chunk, err := br.ReadSlice('\n')
+		if line != nil || len(chunk) > 0 {
+			if len(line)+len(chunk) > max {
+				line = nil
+				for err == bufio.ErrBufferFull { // drop the rest of the line
+					_, err = br.ReadSlice('\n')
+				}
+				return nil, err
+			}
+			line = append(line, chunk...)
+		}
+		if err != bufio.ErrBufferFull {
+			return line, err
+		}
+	}
+}
+
 // readAudit returns audit entries newest first, filtered and paged.
 // ponytail: reads the whole file per request; index or tail-read if logs get huge.
 func readAudit(path, host, decision, since string, limit, offset int) ([]audit.Entry, int, error) {
@@ -232,8 +254,8 @@ func readAudit(path, host, decision, since string, limit, offset int) ([]audit.E
 	var all []audit.Entry
 	br := bufio.NewReader(f)
 	for {
-		line, err := br.ReadBytes('\n') // lines over 4 MiB or unparseable are skipped, not fatal
-		if len(line) > 0 && len(line) <= 4<<20 {
+		line, err := readLine(br, 4<<20) // over-long or unparseable lines are skipped, not fatal
+		if len(line) > 0 {
 			var e audit.Entry
 			if json.Unmarshal(line, &e) == nil &&
 				!(host != "" && e.Host != host) && !(decision != "" && e.Decision != decision) && !(!sinceT.IsZero() && e.Time.Before(sinceT)) {

@@ -64,7 +64,8 @@ func OpenURL(u string) error {
 // environment is not trusted: BROWSER, LD_PRELOAD and PATH never reach it.
 func openEnv(environ []string, goos string) []string {
 	keep := []string{"DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR",
-		"XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE", "XDG_DATA_DIRS", "XDG_CONFIG_DIRS", "HOME", "LANG", "LC_ALL"}
+		"XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE", "XDG_DATA_DIRS", "XDG_CONFIG_DIRS", "HOME", "LANG", "LC_ALL", "LANGUAGE",
+		"XMODIFIERS", "GTK_IM_MODULE", "QT_IM_MODULE", "SDL_IM_MODULE", "CLUTTER_IM_MODULE"}
 	if goos == "windows" {
 		keep = append(keep, "SystemRoot", "USERPROFILE", "TEMP", "TMP", "LOCALAPPDATA", "APPDATA")
 	}
@@ -78,7 +79,10 @@ func openEnv(environ []string, goos string) []string {
 			}
 		}
 	}
-	if goos != "windows" {
+	switch goos {
+	case "linux":
+		out = append(out, "PATH=/usr/local/bin:/usr/bin:/bin:/snap/bin")
+	case "darwin":
 		out = append(out, "PATH=/usr/local/bin:/usr/bin:/bin")
 	}
 	return out

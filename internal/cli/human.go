@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/rpc"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -56,6 +57,9 @@ func cmdDaemon(args []string) int {
 			return errf(1, "%v", err)
 		}
 		log.SetOutput(f)
+	}
+	if daemon.Running() { // cheap check first: no keyring unlock for a duplicate start
+		return errf(1, "daemon already running")
 	}
 	d, err := daemon.New(approval.Notify, approvalTimeout)
 	if err != nil {
@@ -633,6 +637,18 @@ func printEntry(line string) {
 		orDash(e.Host), orDash(e.Level), e.Decision, exit, e.Cmd, note)
 }
 
+// dialRetry dials the daemon, retrying every 200 ms for up to wait.
+func dialRetry(wait time.Duration) (*rpc.Client, error) {
+	deadline := time.Now().Add(wait)
+	for {
+		c, err := daemon.Dial()
+		if err == nil || !time.Now().Add(200*time.Millisecond).Before(deadline) {
+			return c, err
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
 // doctorChecks runs the doctor checks. notify=false skips sending the test
 // notification (the UI calls this often).
 func doctorChecks(notify bool) []ui.Check {
@@ -641,7 +657,12 @@ func doctorChecks(notify bool) []ui.Check {
 	warn := func(s string) { out = append(out, ui.Check{OK: false, Text: s}) }
 
 	var st daemon.StatusReply
-	if c, err := daemon.Dial(); err != nil {
+	wait := time.Duration(0)
+	if notify {
+		wait = 3 * time.Second // a just-restarted service needs a moment
+	}
+	c, err := dialRetry(wait)
+	if err != nil {
 		warn("daemon is not running (systemctl --user start agentssh, or agentssh daemon --detach)")
 	} else {
 		if err := c.Call("A.Status", &daemon.Empty{}, &st); err != nil {
