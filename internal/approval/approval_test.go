@@ -222,3 +222,56 @@ func TestResolveRacingDecisions(t *testing.T) {
 		}
 	}
 }
+
+func TestTicketIDsRandom(t *testing.T) {
+	q := NewQueue((&sink{}).notify, time.Minute)
+	a, _ := q.Ticket("reload", "", nil)
+	b, _ := q.Ticket("reload", "", nil)
+	if a <= 0 || b <= 0 || a == b || b == a+1 || a == b+1 {
+		t.Fatalf("ticket ids %d, %d: want random positive ids", a, b)
+	}
+}
+
+func TestOSModeNotifyFailureHidesCode(t *testing.T) {
+	q := NewQueue(func(_, _ string) error { return errors.New("no display") }, time.Minute)
+	q.UseCodes = func() bool { return false }
+	q.Add(Request{ID: 40})
+	if p := q.Pending(); len(p) != 1 || p[0].Code != "" {
+		t.Fatalf("pending exposes a code in OS mode: %+v", p)
+	}
+	if r, ok := q.Get(40); !ok || r.Code != "" {
+		t.Fatalf("get exposes a code in OS mode: %+v", r)
+	}
+}
+
+func TestSendCode(t *testing.T) {
+	s := &sink{}
+	q := NewQueue(s.notify, time.Minute)
+	q.UseCodes = func() bool { return false }
+	q.Add(Request{ID: 41, Host: "web1", Cmd: "rm x", Level: "destructive"})
+	q.UseCodes = nil // the daemon fell back to codes
+	if err := q.SendCode(41); err != nil || !strings.HasPrefix(s.last, "web1: rm x [destructive] code: ") {
+		t.Fatalf("%v %q", err, s.last)
+	}
+	if _, err := q.Decide(41, s.code(), "y", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.SendCode(41); err == nil {
+		t.Fatal("code sent for a decided request")
+	}
+
+	// Notification fails: the code is exposed for the terminal.
+	q.UseCodes = func() bool { return false }
+	q.Notify = func(_, _ string) error { return errors.New("no display") }
+	q.Add(Request{ID: 42})
+	q.UseCodes = nil
+	if p, _ := q.Get(42); p.Code != "" {
+		t.Fatalf("code exposed before the fallback: %+v", p)
+	}
+	if err := q.SendCode(42); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := q.Get(42); len(p.Code) != 4 {
+		t.Fatalf("failed notification should expose the code: %+v", p)
+	}
+}

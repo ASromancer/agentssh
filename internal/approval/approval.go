@@ -6,6 +6,8 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"math"
+	"math/big"
 	"os"
 	"os/exec"
 	"runtime"
@@ -85,11 +87,10 @@ type Queue struct {
 	// notifications carry no code. nil means true.
 	UseCodes func() bool
 
-	mu         sync.Mutex
-	pending    map[int]*entry
-	sticky     map[string]time.Time
-	tickets    map[int]*ticket
-	nextTicket int
+	mu      sync.Mutex
+	pending map[int]*entry
+	sticky  map[string]time.Time
+	tickets map[int]*ticket
 }
 
 func NewQueue(notify func(title, body string) error, timeout time.Duration) *Queue {
@@ -114,7 +115,7 @@ func (q *Queue) Sticky(host, cmd string) bool {
 // It returns whether the notification was delivered.
 func (q *Queue) Add(r Request) bool {
 	e := &entry{req: r, code: NewCode(), done: make(chan Decision, 1)}
-	body := fmt.Sprintf("%s: %s [%s] code: %s", r.Host, r.Cmd, r.Level, e.code)
+	body := codeBody(r, e.code)
 	if !q.codes() {
 		body = fmt.Sprintf("%s: %s [%s] — open agentssh to approve", r.Host, r.Cmd, r.Level)
 	}
@@ -132,6 +133,30 @@ func (q *Queue) Add(r Request) bool {
 		q.mu.Unlock()
 	})
 	return err == nil
+}
+
+func codeBody(r Request, code string) string {
+	return fmt.Sprintf("%s: %s [%s] code: %s", r.Host, r.Cmd, r.Level, code)
+}
+
+// SendCode notifies the code of a pending request that was added while
+// approvals used OS authentication, after the daemon fell back to codes.
+// If the notification fails, the code is exposed in Request.Code.
+func (q *Queue) SendCode(id int) error {
+	q.mu.Lock()
+	e, ok := q.pending[id]
+	if !ok || e.decided {
+		q.mu.Unlock()
+		return fmt.Errorf("no pending request #%d", id)
+	}
+	r, code := e.req, e.code
+	q.mu.Unlock()
+	if err := q.Notify("agentssh approval #"+fmt.Sprint(id), codeBody(r, code)); err != nil {
+		q.mu.Lock()
+		e.req.Code = code
+		q.mu.Unlock()
+	}
+	return nil
 }
 
 // finish records d as the decision for id. It returns false, and changes
@@ -267,14 +292,20 @@ func (q *Queue) Get(id int) (Request, bool) {
 }
 
 // Ticket starts an admin operation: it sends a code out of band and
-// returns the ticket id. data is handed back by Check (e.g. the host key
+// returns the ticket id, a random positive number so that another caller
+// cannot guess and take the human's ticket. data is handed back by Check (e.g. the host key
 // whose fingerprint the human saw). code is returned only if the
 // notification failed.
 func (q *Queue) Ticket(op, detail string, data any) (id int, code string) {
 	t := &ticket{op: op, code: NewCode(), data: data, expires: time.Now().Add(TicketValid)}
 	q.mu.Lock()
-	q.nextTicket++
-	id = q.nextTicket
+	for id == 0 || q.tickets[id] != nil {
+		n, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt))
+		if err != nil {
+			panic(err)
+		}
+		id = int(n.Int64()) + 1 // 1..MaxInt
+	}
 	q.tickets[id] = t
 	q.mu.Unlock()
 	body := fmt.Sprintf("admin: %s code: %s", op, t.code)
