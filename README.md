@@ -162,6 +162,17 @@ When the agent runs something destructive:
 
 **Fallback: codes.** Without OS authentication (turned off, no local graphical session, polkit action missing or installed for another user), the notification carries a 4-character code that you type after choosing. Three wrong codes deny the request. A daemon that started in OS mode never switches to codes by itself (see above). `agentssh doctor` shows which mode is active.
 
+## GUI
+
+The daemon serves a local page on `127.0.0.1` with a random port. Open it with `agentssh ui` or from the tray icon. Clicking an approval notification (Linux, Windows) opens it at that request.
+
+- **Duyệt:** pending requests with the exact command (risky parts highlighted), approve once, approve 30 minutes, deny, or deny with a message. Approving shows the OS authentication dialog, as in the terminal.
+- **Host:** add, edit, delete, trust a host key, reload the config.
+- **Vault & key:** lock and unlock; generate, import and delete keys. Private keys are never shown; exporting stays in the terminal (`agentssh key export`).
+- **Nhật ký & trạng thái:** the `doctor` checks and the audit log, with each command's full output.
+
+Login links are single use (10 minutes): `agentssh ui` asks the daemon for one over its socket (`agentssh ui --print` prints it), and the tray and notifications mint their own. The page then keeps a session cookie that expires after 8 hours idle. It refuses other hosts and cross-origin requests. In OS-auth mode, approving and admin changes go through the OS dialog; in code mode they need the approval code, and deny and lock need neither. Clickable notifications exist only in OS-auth mode. Flags: `agentssh daemon --no-ui`, `--no-tray`, `--ui-port N`. On GNOME the tray icon needs the AppIndicator extension (preinstalled on Ubuntu).
+
 ## Threat model — read this
 
 - **Default mode: the daemon runs as your user.** It protects against an agent that has been prompt-injected and uses its normal tools (Bash, Edit, Write) to:
@@ -170,6 +181,7 @@ When the agent runs something destructive:
   - approve its own requests
 
   It does **not** protect against a malicious process running as your user that attacks deliberately. Such a process can read the OS keyring, debug the daemon, or read your screen.
+- **The web UI login stops websites and other local users, not a same-user agent.** A process of your user can call the daemon's socket (`agentssh ui --print`) and get a login link, as it can do anything else you can. Login links are single-use and expire in 10 minutes; another local user who reads one from a process list before the browser opens it could race the browser (you would then see a 401: run `agentssh ui` again).
 - **Hardened mode (planned for V1.1):** the daemon runs as a separate system user, so agents cannot read the vault, the config or the daemon's memory. This is a real security boundary.
 - Approvals and admin operations are confirmed through the operating system's authentication dialog, triggered by the daemon itself; a caller of the daemon (including an agent) cannot complete them without the human passing that dialog. **Authenticate only dialogs you started yourself**, and check that the request number and command match what `approve` shows: an agent can start a dialog too, and authenticating it approves what it names.
 - The mode is chosen when the daemon starts (and on an approved `agentssh reload`); agentssh never falls back to codes on its own. A dialog that is cancelled, times out or cannot be shown is a refusal, and the request stays pending.

@@ -12,7 +12,7 @@ first part runs in code mode (AGENTSSH_OS_AUTH=0), the last part in OS mode.
 
 usage: go build -tags e2efake -o /tmp/agentssh-e2e . && python3 scripts/e2e.py /tmp/agentssh-e2e
 """
-import fcntl, json, os, re, select, shutil, signal, socket, subprocess, sys, tempfile, termios, time
+import fcntl, http.client, json, os, re, select, shutil, signal, socket, subprocess, sys, tempfile, termios, time, urllib.parse
 
 BIN = os.path.abspath(sys.argv[1])  # built with -tags e2efake
 SSHD = shutil.which("sshd") or "/usr/sbin/sshd"
@@ -30,6 +30,47 @@ ENV.update(HOME=HOME, XDG_CONFIG_HOME=f"{HOME}/.config", XDG_STATE_HOME=f"{HOME}
 os.makedirs(ENV["XDG_RUNTIME_DIR"], mode=0o700)
 NOTES = os.path.join(TMP, "notifications.log")
 ENV["AGENTSSH_E2E_NOTES"] = NOTES
+
+ENV["AGENTSSH_NO_TRAY"] = "1"
+
+
+class UI:
+    """Talks to the daemon's web UI like a browser would."""
+
+    def __init__(self):
+        rc, out, err = run("ui", "--print")
+        assert rc == 0, err
+        self.url = out.strip()  # one-time login link from the daemon
+        u = urllib.parse.urlsplit(self.url)
+        self.host, self.port = u.hostname, u.port
+        self.cookie = None
+
+    def req(self, method, path, body=None, host=None, origin="same", cookie=True, ctype="application/json"):
+        c = http.client.HTTPConnection(self.host, self.port, timeout=30)
+        h = {"Host": host or f"127.0.0.1:{self.port}"}
+        if cookie and self.cookie:
+            h["Cookie"] = self.cookie
+        data = None
+        if method != "GET":
+            h["Content-Type"] = ctype
+            if origin == "same":
+                h["Origin"] = f"http://127.0.0.1:{self.port}"
+            elif origin:
+                h["Origin"] = origin
+            data = json.dumps(body or {})
+        c.request(method, path, body=data, headers=h)
+        r = c.getresponse()
+        return r.status, r.getheader("Set-Cookie"), r.read().decode()
+
+    def loginpath(self):
+        u = urllib.parse.urlsplit(self.url)
+        return u.path + "?" + u.query
+
+    def login(self):
+        status, setc, _ = self.req("GET", self.loginpath(), cookie=False)
+        self.cookie = setc.split(";")[0] if setc else None
+        return status
+
 
 passed = 0
 
@@ -435,6 +476,53 @@ def main():
         t.wait()
         rc, out, _ = run("doctor")
         check("approvals use OS authentication" in out, "doctor reports OS authentication", out)
+        ui = UI()
+        check(ui.login() == 303 and ui.cookie and ui.cookie.startswith("agentssh="), "UI login exchanges the nonce for a cookie")
+        check(ui.req("GET", ui.loginpath(), cookie=False)[0] == 401, "a login link works only once")
+        check(not os.path.exists(os.path.join(HOME, ".local", "state", "agentssh", "ui.url")), "no ui.url file is written")
+        check(ui.req("GET", "/api/pending", cookie=False)[0] == 401, "UI refuses requests without the cookie")
+        check(ui.req("GET", "/api/pending", host="evil.example")[0] == 421, "UI refuses a foreign Host header")
+        check(ui.req("POST", "/api/lock", origin="http://evil.example")[0] == 403, "UI refuses a cross-origin POST")
+        st, _, body = ui.req("GET", "/api/hosts")
+        check(st == 200 and '"e2e"' in body, "UI lists hosts", body)
+        victimui = os.path.join(remote, "victimui")
+        open(victimui, "w").write("x")
+        open(gate, "w").write("allow")
+        agent = subprocess.Popen([BIN, "run", "e2e", f"rm {victimui}"], env=ENV, stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        rid = None
+        for _ in range(50):
+            pend = json.loads(ui.req("GET", "/api/pending")[2])
+            if pend:
+                rid = pend[0]["id"]
+                break
+            time.sleep(0.2)
+        st, _, body = ui.req("POST", "/api/decide", {"id": rid, "choice": "y"})
+        out, err = agent.communicate(timeout=30)
+        check(st == 200 and agent.returncode == 0 and not os.path.exists(victimui),
+              "approve from the UI (OS authentication) runs the command", body + out + err)
+        st, _, body = ui.req("GET", "/api/audit?host=e2e&limit=5")
+        check(st == 200 and f"rm {victimui}" in body, "UI shows the audit log", body)
+        notes = open(NOTES).read()
+        check(f"#req={rid}" in notes, "approval notification links to the UI request", notes[-300:])
+        open(gate, "w").write("deny")
+        victimd = os.path.join(remote, "victimd")
+        open(victimd, "w").write("x")
+        agent = subprocess.Popen([BIN, "run", "e2e", f"rm {victimd}"], env=ENV, stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        rid = None
+        for _ in range(50):
+            pend = json.loads(ui.req("GET", "/api/pending")[2])
+            if pend:
+                rid = pend[0]["id"]
+                break
+            time.sleep(0.2)
+        check(rid is not None, "UI deny path: the request appeared in pending")
+        st, _, body = ui.req("POST", "/api/decide", {"id": rid, "choice": "y"})
+        check(st == 400 and os.path.exists(victimd), "UI approve is refused when the OS dialog denies", body)
+        st, _, body = ui.req("POST", "/api/decide", {"id": rid, "choice": "n"})
+        out, err = agent.communicate(timeout=30)
+        check(st == 200 and agent.returncode == 101 and os.path.exists(victimd), "UI deny needs no authentication", body + out + err)
         victim4 = os.path.join(remote, "victim4")
         open(victim4, "w").write("x")
         agent = subprocess.Popen([BIN, "run", "e2e", f"rm {victim4}"], env=ENV, stdin=subprocess.DEVNULL,

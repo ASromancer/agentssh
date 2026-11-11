@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -127,10 +128,10 @@ type harness struct {
 	remote string
 }
 
-func (h *harness) notify(_, body string) error {
+func (h *harness) notify(n approval.Notice) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.notes = append(h.notes, body)
+	h.notes = append(h.notes, n.Body)
 	return nil
 }
 
@@ -257,6 +258,16 @@ func TestDaemonEndToEnd(t *testing.T) {
 	h.call("Hosts", &Env{Cwd: h.tmp}, &hr)
 	if len(hr.Hosts) != 1 || hr.Hosts[0].Name != "web1" || hr.Hosts[0].Profile != "standard" {
 		t.Fatalf("hosts: %+v", hr)
+	}
+	var hl HostListReply
+	if err := h.call("HostList", &Empty{}, &hl); err != nil {
+		t.Fatal(err)
+	}
+	if len(hl.Hosts) != 2 || hl.Hosts["hidden"].Agent || !hl.Hosts["web1"].Agent || !hl.Trusted["web1"] || hl.Trusted["hidden"] {
+		t.Fatalf("host list: %+v", hl)
+	}
+	if h.d.Service() == nil {
+		t.Fatal("Service accessor")
 	}
 
 	r := h.exec(ExecArgs{Cmd: "echo hello"})
@@ -700,5 +711,57 @@ func TestReloadNeverDowngrades(t *testing.T) {
 	var st StatusReply
 	if h.call("Status", &Empty{}, &st); st.Auth != "os" || !strings.Contains(ar.Out, "Wayland display gone") {
 		t.Fatalf("reload downgraded or hid the reason: %+v %q", st, ar.Out)
+	}
+}
+
+func TestRunning(t *testing.T) {
+	base := "/tmp" // short: unix socket paths are limited to ~104 bytes
+	if runtime.GOOS == "windows" {
+		base = ""
+	}
+	dir, _ := os.MkdirTemp(base, "agentssh-run")
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Setenv("AGENTSSH_SOCKET", filepath.Join(dir, "s"))
+	if Running() {
+		t.Fatal("running with no socket")
+	}
+	ln, err := net.Listen("unix", filepath.Join(dir, "s"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+	if !Running() {
+		t.Fatal("not running with a listener")
+	}
+}
+
+func TestUILogin(t *testing.T) {
+	h := setup(t)
+	var lr UILoginReply
+	if err := h.call("UILogin", &Empty{}, &lr); err == nil || !strings.Contains(err.Error(), "UI is not running") {
+		t.Fatalf("unset: %v", err)
+	}
+	var st StatusReply
+	h.call("Status", &Empty{}, &st)
+	if st.UI != "" {
+		t.Fatalf("UI %q", st.UI)
+	}
+	n := 0
+	h.d.SetUI("http://127.0.0.1:1/", func() string { n++; return "http://127.0.0.1:1/?n=" + strconv.Itoa(n) })
+	if err := h.call("UILogin", &Empty{}, &lr); err != nil || lr.URL != "http://127.0.0.1:1/?n=1" {
+		t.Fatalf("login: %v %q", err, lr.URL)
+	}
+	h.call("Status", &Empty{}, &st)
+	if st.UI != "http://127.0.0.1:1/" {
+		t.Fatalf("UI %q", st.UI)
 	}
 }

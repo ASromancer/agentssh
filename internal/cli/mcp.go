@@ -211,7 +211,7 @@ func failText(code int, msg string) string {
 // call runs one tool and returns its text and whether it is an error.
 func (s *mcpServer) call(name string, a map[string]any) (string, bool) {
 	if name == "output" {
-		out, err := readOutput(argInt(a, "id"), argStr(a, "grep"), argStr(a, "range"))
+		out, err := daemon.ReadOutput(argInt(a, "id"), argStr(a, "grep"), argStr(a, "range"))
 		if err != nil {
 			return err.Error(), true
 		}

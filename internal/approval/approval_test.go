@@ -2,16 +2,17 @@ package approval
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
-type sink struct{ last string }
+type sink struct{ last, link string }
 
-func (s *sink) notify(_, body string) error { s.last = body; return nil }
-func (s *sink) code() string                { return s.last[strings.LastIndex(s.last, " ")+1:] }
+func (s *sink) notify(n Notice) error { s.last, s.link = n.Body, n.Link; return nil }
+func (s *sink) code() string          { return s.last[strings.LastIndex(s.last, " ")+1:] }
 
 func TestWrongCodeThreeTimes(t *testing.T) {
 	s := &sink{}
@@ -63,7 +64,7 @@ func TestDenyWithMessage(t *testing.T) {
 }
 
 func TestNotifyFailureExposesCode(t *testing.T) {
-	q := NewQueue(func(_, _ string) error { return errors.New("no display") }, time.Minute)
+	q := NewQueue(func(Notice) error { return errors.New("no display") }, time.Minute)
 	q.Add(Request{ID: 4})
 	if p := q.Pending(); len(p) != 1 || len(p[0].Code) != 4 {
 		t.Fatalf("%+v", p)
@@ -230,10 +231,16 @@ func TestTicketIDsRandom(t *testing.T) {
 	if a <= 0 || b <= 0 || a == b || b == a+1 || a == b+1 {
 		t.Fatalf("ticket ids %d, %d: want random positive ids", a, b)
 	}
+	// the web UI parses ids as JS numbers: they must stay exact
+	for i := 0; i < 1000; i++ {
+		if id, _ := q.Ticket("reload", "", nil); id > maxJSInt {
+			t.Fatalf("ticket id %d exceeds 2^53-1", id)
+		}
+	}
 }
 
 func TestOSModeNotifyFailureHidesCode(t *testing.T) {
-	q := NewQueue(func(_, _ string) error { return errors.New("no display") }, time.Minute)
+	q := NewQueue(func(Notice) error { return errors.New("no display") }, time.Minute)
 	q.UseCodes = func() bool { return false }
 	q.Add(Request{ID: 40})
 	if p := q.Pending(); len(p) != 1 || p[0].Code != "" {
@@ -263,5 +270,50 @@ func TestNotifyEnv(t *testing.T) {
 		if strings.Contains(got, bad) {
 			t.Errorf("windows: %s leaked into %s", bad, got)
 		}
+	}
+}
+
+func TestNoticeLink(t *testing.T) {
+	s := &sink{}
+	q := NewQueue(s.notify, time.Minute)
+	q.UseCodes = func() bool { return false }
+	q.Add(Request{ID: 3, Host: "web1", Cmd: "rm x", Level: "destructive"})
+	if s.link != "" {
+		t.Fatalf("link without Queue.Link: %q", s.link)
+	}
+	q.Link = func(id int) string { return fmt.Sprintf("http://127.0.0.1:1/#req=%d", id) }
+	q.Add(Request{ID: 4, Host: "web1", Cmd: "rm y", Level: "destructive"})
+	if s.link != "http://127.0.0.1:1/#req=4" {
+		t.Fatalf("link %q", s.link)
+	}
+	q.UseCodes = func() bool { return true }
+	q.Add(Request{ID: 5, Host: "web1", Cmd: "rm z", Level: "destructive"})
+	if s.link != "" {
+		t.Fatalf("code mode must send no link: %q", s.link)
+	}
+	q.Ticket("key-rm a", "", nil)
+	if s.link != "" {
+		t.Fatalf("admin notices carry no link: %q", s.link)
+	}
+}
+
+func TestLinuxNotifyArgs(t *testing.T) {
+	plain := linuxNotifyArgs(Notice{Title: "t", Body: "b"})
+	if strings.Join(plain, " ") != "-u critical -a agentssh -- t b" {
+		t.Fatalf("plain %q", plain)
+	}
+	linked := strings.Join(linuxNotifyArgs(Notice{Title: "t", Body: "b", Link: "http://127.0.0.1:9/"}), " ")
+	if linked != "-u critical -a agentssh -A open=Mở --wait -- t b" {
+		t.Fatalf("linked %q", linked)
+	}
+}
+
+func TestExpiresSet(t *testing.T) {
+	q := NewQueue((&sink{}).notify, time.Minute)
+	before := time.Now()
+	q.Add(Request{ID: 3})
+	p := q.Pending()
+	if len(p) != 1 || p[0].Expires.Before(before.Add(time.Minute)) || p[0].Expires.After(time.Now().Add(time.Minute)) {
+		t.Fatalf("%+v", p)
 	}
 }

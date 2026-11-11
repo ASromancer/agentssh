@@ -3,10 +3,10 @@
 package approval
 
 import (
+	"bytes"
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"math"
 	"math/big"
 	"os"
 	"os/exec"
@@ -21,21 +21,27 @@ import (
 )
 
 type Request struct {
-	ID      int             `json:"id"`
-	Time    time.Time       `json:"time"`
-	Host    string          `json:"host"`
-	User    string          `json:"user"`
-	Cwd     string          `json:"cwd"`
-	Repo    string          `json:"repo"`
-	Agent   string          `json:"agent"`
-	Kind    string          `json:"kind"`
-	Cmd     string          `json:"cmd"`
-	Level   string          `json:"level"`
+	ID    int       `json:"id"`
+	Time  time.Time `json:"time"`
+	Host  string    `json:"host"`
+	User  string    `json:"user"`
+	Cwd   string    `json:"cwd"`
+	Repo  string    `json:"repo"`
+	Agent string    `json:"agent"`
+	Kind  string    `json:"kind"`
+	Cmd   string    `json:"cmd"`
+	Level string    `json:"level"`
+	// Expires is when the request times out; set by Queue.Add.
+	Expires time.Time       `json:"expires"`
 	Reasons []policy.Reason `json:"reasons"`
 	// Code is only filled in when the desktop notification could not be
 	// sent, so the human can still approve from a terminal (spec 7).
 	Code string `json:"code,omitempty"`
 }
+
+// Notice is one desktop notification. Link, when set, is opened if the
+// human clicks the notification (Linux and Windows).
+type Notice struct{ Title, Body, Link string }
 
 type Decision struct {
 	OK      bool
@@ -82,8 +88,11 @@ type ticket struct {
 }
 
 type Queue struct {
-	Notify  func(title, body string) error
+	Notify  func(Notice) error
 	Timeout time.Duration
+	// Link returns the UI address of a request, shown as the notification's
+	// click target. nil means no link. Set it before the queue is used.
+	Link func(id int) string
 	// UseCodes reports whether approvals use out-of-band codes. When it
 	// returns false, the daemon authenticates the human through the OS and
 	// notifications carry no code. nil means true.
@@ -95,7 +104,7 @@ type Queue struct {
 	tickets map[int]*ticket
 }
 
-func NewQueue(notify func(title, body string) error, timeout time.Duration) *Queue {
+func NewQueue(notify func(Notice) error, timeout time.Duration) *Queue {
 	return &Queue{Notify: notify, Timeout: timeout, pending: map[int]*entry{},
 		sticky: map[string]time.Time{}, tickets: map[int]*ticket{}}
 }
@@ -116,13 +125,18 @@ func (q *Queue) Sticky(host, cmd string) bool {
 // Add registers a request, notifies the human and starts its timeout.
 // It returns whether the notification was delivered.
 func (q *Queue) Add(r Request) bool {
+	r.Expires = time.Now().Add(q.Timeout)
 	e := &entry{req: r, code: NewCode(), done: make(chan Decision, 1)}
 	codes := q.codes()
 	body := fmt.Sprintf("%s: %s [%s] code: %s", r.Host, r.Cmd, r.Level, e.code)
 	if !codes {
 		body = fmt.Sprintf("%s: %s [%s] — open agentssh to approve", r.Host, r.Cmd, r.Level)
 	}
-	err := q.Notify("agentssh approval #"+fmt.Sprint(r.ID), body)
+	link := ""
+	if q.Link != nil && !codes {
+		link = q.Link(r.ID)
+	}
+	err := q.Notify(Notice{Title: "agentssh approval #" + fmt.Sprint(r.ID), Body: body, Link: link})
 	if err != nil && codes {
 		e.req.Code = e.code
 	}
@@ -232,7 +246,8 @@ func (q *Queue) Resolve(id int, choice, msg, auth string) (Decision, error) {
 	}
 	q.mu.Lock()
 	e, ok := q.pending[id]
-	decided := ok && e.decided
+	// past Expires counts as decided even if the timeout timer has not fired yet
+	decided := ok && (e.decided || time.Now().After(e.req.Expires))
 	q.mu.Unlock()
 	if !ok || decided {
 		return Decision{}, fmt.Errorf("no pending request #%d", id)
@@ -275,15 +290,19 @@ func (q *Queue) Get(id int) (Request, bool) {
 // cannot guess and take the human's ticket. data is handed back by Check (e.g. the host key
 // whose fingerprint the human saw). code is returned only if the
 // notification failed.
+// maxJSInt is the largest integer a JavaScript number holds exactly; the
+// web UI round-trips ticket ids through JSON numbers.
+const maxJSInt = 1<<53 - 1
+
 func (q *Queue) Ticket(op, detail string, data any) (id int, code string) {
 	t := &ticket{op: op, code: NewCode(), data: data, expires: time.Now().Add(TicketValid)}
 	q.mu.Lock()
 	for id == 0 || q.tickets[id] != nil {
-		n, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt))
+		n, err := rand.Int(rand.Reader, big.NewInt(maxJSInt))
 		if err != nil {
 			panic(err)
 		}
-		id = int(n.Int64()) + 1 // 1..MaxInt
+		id = int(n.Int64()) + 1 // 1..2^53-1
 	}
 	q.tickets[id] = t
 	q.mu.Unlock()
@@ -294,7 +313,7 @@ func (q *Queue) Ticket(op, detail string, data any) (id int, code string) {
 	if !q.codes() {
 		return id, ""
 	}
-	if err := q.Notify("agentssh", body); err != nil {
+	if err := q.Notify(Notice{Title: "agentssh", Body: body}); err != nil {
 		return id, t.code
 	}
 	return id, ""
@@ -337,8 +356,9 @@ func (q *Queue) Check(id int, op, code string) (any, error) {
 // Desktop sends a desktop notification (notify-send / osascript /
 // powershell). The helper is run only from a root-owned system path, never
 // found through PATH; without one, Desktop fails and the code is shown in
-// the terminal instead.
-func Desktop(title, body string) error {
+// the terminal instead. A Link is opened when the human clicks the
+// notification (Linux: notify-send action; Windows: toast launch).
+func Desktop(n Notice) error {
 	var cands []string
 	switch runtime.GOOS {
 	case "linux":
@@ -354,23 +374,68 @@ func Desktop(title, body string) error {
 	if err != nil {
 		return err
 	}
+	if n.Link != "" && !LocalURL(n.Link) {
+		n.Link = ""
+	}
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "linux":
-		cmd = exec.Command(bin, "-u", "critical", "-a", "agentssh", title, body)
+		cmd = exec.Command(bin, linuxNotifyArgs(n)...)
 	case "darwin":
 		q := func(s string) string { return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"` }
-		cmd = exec.Command(bin, "-e", "display notification "+q(body)+" with title "+q(title))
+		cmd = exec.Command(bin, "-e", "display notification "+q(n.Body)+" with title "+q(n.Title))
 	case "windows":
-		// Title and body go through the environment, never into the script.
+		// Title, body and link go through the environment, never into the script.
 		cmd = exec.Command(bin, "-NoProfile", "-NonInteractive", "-Command", windowsToast)
 	}
-	cmd.Env = append(notifyEnv(os.Environ(), runtime.GOOS), "AGENTSSH_TITLE="+title, "AGENTSSH_BODY="+body)
+	cmd.Env = append(notifyEnv(os.Environ(), runtime.GOOS),
+		"AGENTSSH_TITLE="+n.Title, "AGENTSSH_BODY="+n.Body, "AGENTSSH_LINK="+n.Link)
+	if runtime.GOOS == "linux" && n.Link != "" {
+		return waitForClick(cmd, n)
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+func linuxNotifyArgs(n Notice) []string {
+	args := []string{"-u", "critical", "-a", "agentssh"}
+	if n.Link != "" {
+		args = append(args, "-A", "open=Mở", "--wait")
+	}
+	return append(args, "--", n.Title, n.Body)
+}
+
+// waitForClick runs a notify-send that waits for its action. It returns
+// once the notification is up; a later click on "Mở" opens the link. An
+// old notify-send without -A/--wait fails at once: retry without the link.
+func waitForClick(cmd *exec.Cmd, n Notice) error {
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			return Desktop(Notice{Title: n.Title, Body: n.Body})
+		}
+		if strings.TrimSpace(out.String()) == "open" {
+			_ = OpenURL(n.Link)
+		}
+		return nil
+	case <-time.After(300 * time.Millisecond):
+		go func() {
+			if <-done == nil && strings.TrimSpace(out.String()) == "open" {
+				_ = OpenURL(n.Link)
+			}
+		}()
+		return nil
+	}
 }
 
 // notifyEnv keeps only the variables a notifier needs. The daemon's
@@ -402,5 +467,6 @@ $t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Wi
 $x = $t.GetElementsByTagName('text')
 $x.Item(0).AppendChild($t.CreateTextNode($env:AGENTSSH_TITLE)) | Out-Null
 $x.Item(1).AppendChild($t.CreateTextNode($env:AGENTSSH_BODY)) | Out-Null
+if ($env:AGENTSSH_LINK) { $t.DocumentElement.SetAttribute('activationType', 'protocol'); $t.DocumentElement.SetAttribute('launch', $env:AGENTSSH_LINK) }
 $app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
 [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show([Windows.UI.Notifications.ToastNotification]::new($t))`

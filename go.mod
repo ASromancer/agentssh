@@ -3,6 +3,7 @@ module github.com/ASromancer/agentssh
 go 1.26.0
 
 require (
+	fyne.io/systray v1.12.2
 	github.com/BurntSushi/toml v1.6.0
 	github.com/pkg/sftp v1.13.12
 	github.com/zalando/go-keyring v0.2.8

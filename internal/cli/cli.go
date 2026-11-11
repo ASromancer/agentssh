@@ -12,6 +12,7 @@ import (
 	"os"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/ASromancer/agentssh/internal/daemon"
 )
@@ -30,7 +31,7 @@ For agents:
 
 For the human user (need a real terminal; approvals and admin commands are confirmed
 in an OS authentication dialog, or with a code from a desktop notification as a fallback):
-  agentssh init [--passphrase] | unlock | lock | approve | reload | doctor | daemon | install-polkit | install-service
+  agentssh init [--passphrase] | unlock | lock | approve | reload | doctor | ui | daemon | install-polkit | install-service
   agentssh host add|edit|ls|rm|trust ...
   agentssh key gen|import|export|ls|rm ...
   agentssh log [--follow] [-n N]
@@ -67,7 +68,7 @@ func Main(args []string) int {
 		"hosts": cmdHosts, "run": cmdRun, "out": cmdOut, "get": cmdGet, "put": cmdPut,
 		"job": cmdJob, "explain": cmdExplain, "hook": cmdHook,
 		"init": cmdInit, "unlock": cmdUnlock, "lock": cmdLock, "approve": cmdApprove,
-		"reload": cmdReload, "host": cmdHost, "key": cmdKey, "log": cmdLog, "doctor": cmdDoctor,
+		"reload": cmdReload, "host": cmdHost, "key": cmdKey, "log": cmdLog, "doctor": cmdDoctor, "ui": cmdUI,
 		"install-hooks": cmdInstallHooks, "daemon": cmdDaemon, "install-polkit": cmdInstallPolkit, "install-service": cmdInstallService, "mcp": cmdMCP,
 		"version": func([]string) int { fmt.Println("agentssh", Version); return 0 },
 	}
@@ -93,7 +94,8 @@ func agentFail(code int, msg string) int {
 }
 
 func dial() (*rpc.Client, int) {
-	c, err := daemon.Dial()
+	// a short retry covers the window right after the daemon (re)starts
+	c, err := dialRetry(2 * time.Second)
 	if err != nil {
 		return nil, agentFail(daemon.CodeNoDaemon, "daemon is not running (systemctl --user start agentssh, or 'agentssh daemon --detach')")
 	}

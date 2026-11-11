@@ -91,7 +91,10 @@ type StatusReply struct {
 	Pending                                    int
 	Auth                                       string // "os" or "code"
 	AuthNote                                   string // why OS authentication is unavailable
+	UI                                         string // base URL of the web UI, "" when it is not running
 }
+
+type UILoginReply struct{ URL string }
 
 type UnlockArgs struct{ Pass string }
 
@@ -129,4 +132,11 @@ func Dial() (*rpc.Client, error) {
 		return nil, err
 	}
 	return jsonrpc.NewClient(c), nil
+}
+
+// HostListReply is every configured host (not only those visible to
+// agents), for the human UI.
+type HostListReply struct {
+	Hosts   map[string]hosts.Host
+	Trusted map[string]bool // host key pinned in known_hosts
 }

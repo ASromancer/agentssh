@@ -97,7 +97,7 @@ func Claude(in io.Reader, out io.Writer, protected []string, explain Explainer) 
 
 var (
 	directSSH  = map[string]bool{"ssh": true, "scp": true, "sftp": true, "mosh": true, "slogin": true}
-	humanOnly  = map[string]bool{"approve": true, "key": true, "reload": true, "host": true, "init": true, "install-hooks": true, "unlock": true, "daemon": true, "install-service": true}
+	humanOnly  = map[string]bool{"approve": true, "key": true, "reload": true, "host": true, "init": true, "install-hooks": true, "unlock": true, "daemon": true, "install-service": true, "ui": true}
 	readOnlyUs = map[string]bool{"hosts": true, "out": true, "explain": true, "help": true, "version": true}
 	// A restarted daemon picks its auth mode again, so stopping it is human only.
 	stopTools = map[string]bool{"systemctl": true, "pkill": true, "kill": true, "killall": true, "launchctl": true}
@@ -148,12 +148,16 @@ func Decide(tool string, input map[string]any, cwd string, protected []string, e
 	}
 	// Any other tool (Edit, Write, apply_patch, write_file, replace, ...):
 	// refuse if it targets agentssh's own files.
+	hasPath := false
 	for _, k := range []string{"file_path", "notebook_path", "path", "TargetFile", "AbsolutePath"} {
-		if p, _ := input[k].(string); p != "" && inside(p, cwd, protected) {
-			return "deny", "agentssh config and state can only be changed by the user"
+		if p, _ := input[k].(string); p != "" {
+			hasPath = true
+			if inside(p, cwd, protected) {
+				return "deny", "agentssh config and state can only be changed by the user"
+			}
 		}
 	}
-	if mentions(fmt.Sprint(input), protected) { // fmt, not JSON: no escaped backslashes
+	if !hasPath && mentions(fmt.Sprint(input), protected) { // fmt, not JSON: no escaped backslashes
 		return "deny", "agentssh config and state can only be changed by the user"
 	}
 	return "", ""
