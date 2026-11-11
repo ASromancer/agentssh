@@ -12,6 +12,7 @@ import (
 	"os"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/ASromancer/agentssh/internal/daemon"
 )
@@ -93,7 +94,8 @@ func agentFail(code int, msg string) int {
 }
 
 func dial() (*rpc.Client, int) {
-	c, err := daemon.Dial()
+	// a short retry covers the window right after the daemon (re)starts
+	c, err := dialRetry(2 * time.Second)
 	if err != nil {
 		return nil, agentFail(daemon.CodeNoDaemon, "daemon is not running (systemctl --user start agentssh, or 'agentssh daemon --detach')")
 	}
