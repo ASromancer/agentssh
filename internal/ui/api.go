@@ -230,20 +230,19 @@ func readAudit(path, host, decision, since string, limit, offset int) ([]audit.E
 	}
 	defer f.Close()
 	var all []audit.Entry
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64<<10), 4<<20)
-	for sc.Scan() {
-		var e audit.Entry
-		if json.Unmarshal(sc.Bytes(), &e) != nil {
-			continue
+	br := bufio.NewReader(f)
+	for {
+		line, err := br.ReadBytes('\n') // lines over 4 MiB or unparseable are skipped, not fatal
+		if len(line) > 0 && len(line) <= 4<<20 {
+			var e audit.Entry
+			if json.Unmarshal(line, &e) == nil &&
+				!(host != "" && e.Host != host) && !(decision != "" && e.Decision != decision) && !(!sinceT.IsZero() && e.Time.Before(sinceT)) {
+				all = append(all, e)
+			}
 		}
-		if (host != "" && e.Host != host) || (decision != "" && e.Decision != decision) || (!sinceT.IsZero() && e.Time.Before(sinceT)) {
-			continue
+		if err != nil {
+			break
 		}
-		all = append(all, e)
-	}
-	if err := sc.Err(); err != nil {
-		return nil, 0, err
 	}
 	sort.SliceStable(all, func(i, j int) bool { return all[i].Time.After(all[j].Time) })
 	total := len(all)

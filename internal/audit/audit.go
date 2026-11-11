@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -34,7 +35,18 @@ type Log struct {
 	Path string
 }
 
+const maxField = 64 << 10
+
+// clip cuts s to maxField bytes at a rune boundary and marks the cut.
+func clip(s string) string {
+	if len(s) <= maxField {
+		return s
+	}
+	return strings.ToValidUTF8(s[:maxField], "") + "…"
+}
+
 func (l *Log) Write(e Entry) error {
+	e.Cmd, e.Note = clip(e.Cmd), clip(e.Note)
 	if e.Time.IsZero() {
 		e.Time = time.Now()
 	}

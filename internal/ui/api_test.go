@@ -45,7 +45,7 @@ func session(t *testing.T, s *Server) string {
 
 func TestAPIDecideAndAdmin(t *testing.T) {
 	f := &fakeBackend{pending: []approval.Request{{ID: 5, Host: "web1", Cmd: "rm x", Level: "destructive"}}}
-	s := newServer(Options{Backend: f, Version: "9.9"}, testTok, 8123)
+	s := newServer(Options{Backend: f, Version: "9.9"}, 8123)
 
 	if w := api(t, s, "GET", "/api/pending", ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"cmd":"rm x"`) {
 		t.Fatalf("pending: %d %s", w.Code, w.Body.String())
@@ -77,7 +77,7 @@ func TestAPIDecideAndAdmin(t *testing.T) {
 
 func TestAPIKeyImportConvertsEncryptedKey(t *testing.T) {
 	f := &fakeBackend{}
-	s := newServer(Options{Backend: f}, testTok, 8123)
+	s := newServer(Options{Backend: f}, 8123)
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 	block, _ := ssh.MarshalPrivateKeyWithPassphrase(priv, "c", []byte("kp"))
 	body, _ := json.Marshal(map[string]any{"ticket": 1, "op": "key-import", "name": "k", "key": string(pem.EncodeToMemory(block)), "keyPassphrase": "kp"})
@@ -104,10 +104,12 @@ func TestAPIAuditAndOutput(t *testing.T) {
 		`{"time":"2026-11-10T10:00:00Z","id":1,"kind":"run","host":"web1","cmd":"ls","decision":"allow"}`,
 		`{"time":"2026-11-11T10:00:00Z","id":2,"kind":"run","host":"db","cmd":"rm x","decision":"denied"}`,
 		`{"time":"2026-11-11T11:00:00Z","id":3,"kind":"run","host":"web1","cmd":"df","decision":"allow"}`,
+		`not json`,
+		`{"time":"2026-11-11T12:00:00Z","id":9,"kind":"run","host":"web1","cmd":"` + strings.Repeat("x", 5<<20) + `","decision":"allow"}`,
 	}, "\n")+"\n"), 0o600)
 	os.MkdirAll(paths.Out(), 0o700)
 	os.WriteFile(filepath.Join(paths.Out(), "3"), []byte("x\nerror y\n"), 0o600)
-	s := newServer(Options{Backend: &fakeBackend{}, AuditFile: auditFile}, testTok, 8123)
+	s := newServer(Options{Backend: &fakeBackend{}, AuditFile: auditFile}, 8123)
 
 	var r struct {
 		Entries []struct{ ID int } `json:"entries"`
@@ -138,10 +140,10 @@ func TestAPIAuditAndOutput(t *testing.T) {
 
 func TestEvents(t *testing.T) {
 	f := &fakeBackend{}
-	s := newServer(Options{Backend: f}, testTok, 8123)
+	s := newServer(Options{Backend: f}, 8123)
 	ts := httptest.NewServer(s.handler())
 	defer ts.Close()
-	lr, _ := http.NewRequest("GET", ts.URL+"/?t="+testTok, nil)
+	lr, _ := http.NewRequest("GET", ts.URL+loginPath(s), nil)
 	lr.Host = apiHost
 	nf := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	lresp, err := nf.Do(lr)
