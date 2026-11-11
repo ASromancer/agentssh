@@ -23,7 +23,7 @@ func LocalURL(u string) bool {
 		return false
 	}
 	h := p.Hostname()
-	return h == "127.0.0.1" || h == "localhost"
+	return h == "127.0.0.1" || strings.EqualFold(h, "localhost")
 }
 
 // OpenURL opens a loopback URL in the user's browser with the platform's

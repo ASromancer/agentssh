@@ -131,7 +131,7 @@ func (q *Queue) Add(r Request) bool {
 		body = fmt.Sprintf("%s: %s [%s] — open agentssh to approve", r.Host, r.Cmd, r.Level)
 	}
 	link := ""
-	if q.Link != nil {
+	if q.Link != nil && !codes {
 		link = q.Link(r.ID)
 	}
 	err := q.Notify(Notice{Title: "agentssh approval #" + fmt.Sprint(r.ID), Body: body, Link: link})
@@ -398,7 +398,7 @@ func linuxNotifyArgs(n Notice) []string {
 	if n.Link != "" {
 		args = append(args, "-A", "open=Mở", "--wait")
 	}
-	return append(args, n.Title, n.Body)
+	return append(args, "--", n.Title, n.Body)
 }
 
 // waitForClick runs a notify-send that waits for its action. It returns

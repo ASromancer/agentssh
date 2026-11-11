@@ -270,6 +270,7 @@ func TestNotifyEnv(t *testing.T) {
 func TestNoticeLink(t *testing.T) {
 	s := &sink{}
 	q := NewQueue(s.notify, time.Minute)
+	q.UseCodes = func() bool { return false }
 	q.Add(Request{ID: 3, Host: "web1", Cmd: "rm x", Level: "destructive"})
 	if s.link != "" {
 		t.Fatalf("link without Queue.Link: %q", s.link)
@@ -280,6 +281,10 @@ func TestNoticeLink(t *testing.T) {
 		t.Fatalf("link %q", s.link)
 	}
 	q.UseCodes = func() bool { return true }
+	q.Add(Request{ID: 5, Host: "web1", Cmd: "rm z", Level: "destructive"})
+	if s.link != "" {
+		t.Fatalf("code mode must send no link: %q", s.link)
+	}
 	q.Ticket("key-rm a", "", nil)
 	if s.link != "" {
 		t.Fatalf("admin notices carry no link: %q", s.link)
@@ -288,11 +293,11 @@ func TestNoticeLink(t *testing.T) {
 
 func TestLinuxNotifyArgs(t *testing.T) {
 	plain := linuxNotifyArgs(Notice{Title: "t", Body: "b"})
-	if strings.Join(plain, " ") != "-u critical -a agentssh t b" {
+	if strings.Join(plain, " ") != "-u critical -a agentssh -- t b" {
 		t.Fatalf("plain %q", plain)
 	}
 	linked := strings.Join(linuxNotifyArgs(Notice{Title: "t", Body: "b", Link: "http://127.0.0.1:9/"}), " ")
-	if linked != "-u critical -a agentssh -A open=Mở --wait t b" {
+	if linked != "-u critical -a agentssh -A open=Mở --wait -- t b" {
 		t.Fatalf("linked %q", linked)
 	}
 }

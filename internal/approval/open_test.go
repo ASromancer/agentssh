@@ -11,6 +11,11 @@ func TestLocalURL(t *testing.T) {
 		"http://127.0.0.1.evil.com:80/":    false,
 		"file:///etc/passwd":               false,
 		"http://127.0.0.1:8123/\nrm -rf ~": false,
+		"http://evil@127.0.0.1:1/":         true,
+		"http://127.0.0.1@evil.com/":       false,
+		"HTTP://127.0.0.1:1/":              true,
+		"http://LOCALHOST:1/":              true,
+		"http://[::1]:1/":                  false,
 	} {
 		if got := LocalURL(u); got != want {
 			t.Errorf("LocalURL(%q) = %v", u, got)
