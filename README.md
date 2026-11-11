@@ -142,7 +142,7 @@ Approvals and admin operations (key generation, host edits, ...) are confirmed t
 
 On macOS and Windows the daemon uses codes until these backends have been verified on real machines. To try OS authentication there, set `AGENTSSH_OS_AUTH=1` in the daemon's environment. `AGENTSSH_OS_AUTH=0` forces codes on every OS.
 
-The daemon chooses the mode when it starts (and again on `agentssh reload`). If the dialog later cannot be shown, approvals fail with an error until you fix it (`agentssh doctor`) or restart the daemon with `AGENTSSH_OS_AUTH=0`; you can still deny with `n`.
+The daemon chooses the mode when it starts; `agentssh reload` can switch codes to OS authentication (after you fix the setup), never back. If the dialog later cannot be shown, approvals fail with an error until you fix it (`agentssh doctor`) or restart the daemon with `AGENTSSH_OS_AUTH=0`; you can still deny with `n`.
 
 When the agent runs something destructive:
 
@@ -169,8 +169,8 @@ When the agent runs something destructive:
 - **Hardened mode (planned for V1.1):** the daemon runs as a separate system user, so agents cannot read the vault, the config or the daemon's memory. This is a real security boundary.
 - Approvals and admin operations are confirmed through the operating system's authentication dialog, triggered by the daemon itself; a caller of the daemon (including an agent) cannot complete them without the human passing that dialog. **Authenticate only dialogs you started yourself**, and check that the request number and command match what `approve` shows: an agent can start a dialog too, and authenticating it approves what it names.
 - The mode is chosen when the daemon starts (and on an approved `agentssh reload`); agentssh never falls back to codes on its own. A dialog that is cancelled, times out or cannot be shown is a refusal, and the request stays pending.
-- System helpers such as `pkcheck` are run from fixed paths that must be owned by root and not writable by others, never looked up in `PATH`.
-- Restarting the daemon with `AGENTSSH_OS_AUTH=0` is a deliberate human action; the agent hooks block `agentssh daemon` and shell commands that mention `AGENTSSH_OS_AUTH` or `agentssh.service`.
+- System helpers (`pkcheck`, `notify-send`, `osascript`, `powershell`) are run from fixed paths that must be owned by root and not writable by others (on Windows: under System32), never looked up in `PATH`. Without a trusted notifier, codes are shown in the terminal.
+- Restarting the daemon with `AGENTSSH_OS_AUTH=0` is a deliberate human action; the agent hooks block `agentssh daemon`, shell commands that mention `AGENTSSH_OS_AUTH` or `agentssh.service`, and `systemctl`/`kill`/`pkill`/`killall` aimed at agentssh. An approved `agentssh reload` can switch codes to OS authentication, never the other way.
 - Code mode uses codes from desktop notifications, which a same-user process could read. In code mode, when a notification cannot be sent, the code is shown in the terminal and is also exposed to any process of your user that calls the daemon's socket. `agentssh doctor` shows which mode is active.
 - Locking a keyring-mode vault (`agentssh lock`) is not a security boundary against processes of your user: they can read the master key from the OS keyring themselves.
 - **Agent hooks are a soft layer.** They deny direct `ssh`/`scp`/`rsync`, deny human-only `agentssh` subcommands, and keep agents out of agentssh's own files. In Claude Code they also ask you before `mutate` commands. The daemon enforces forbidden commands, profiles and approvals whether or not a hook is installed.
@@ -204,7 +204,7 @@ Background jobs live in the daemon and are lost if it restarts. Their output sta
 
 ```sh
 go test ./...                                         # unit tests + in-process SSH server test
-go build -o /tmp/agentssh . && python3 scripts/e2e.py /tmp/agentssh   # real sshd, real CLI (Linux/macOS)
+go build -tags e2efake -o /tmp/agentssh-e2e . && python3 scripts/e2e.py /tmp/agentssh-e2e   # real sshd, real CLI (Linux/macOS)
 ```
 
 CI runs both on Linux, macOS and Windows (unit tests only on Windows).
