@@ -81,6 +81,7 @@ func TestBash(t *testing.T) {
 		// Restarting the daemon could switch it to codes: human only.
 		{`ostiary ui`, "deny"},
 		{`ostiary open`, "deny"},
+		{`ostiary stop`, "deny"},
 		{`ostiary upgrade`, "deny"},
 		{`ostiary uninstall-service`, "deny"},
 		{`ostiary daemon --detach`, "deny"},

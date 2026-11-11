@@ -83,6 +83,13 @@ func removeService() error {
 	return nil
 }
 
+func startService() error {
+	if out, err := exec.Command("schtasks", "/Run", "/TN", "ostiary").CombinedOutput(); err != nil {
+		return fmt.Errorf("schtasks: %v: %s", err, out)
+	}
+	return nil
+}
+
 func serviceInstalled() bool {
 	return exec.Command("schtasks", "/Query", "/TN", "ostiary").Run() == nil
 }

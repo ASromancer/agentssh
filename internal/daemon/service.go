@@ -559,6 +559,18 @@ func (s *Service) Lock(_ *Empty, _ *Empty) error {
 	return nil
 }
 
+// Shutdown stops the daemon: it replies, then closes the listener so Serve returns.
+func (s *Service) Shutdown(_ *Empty, _ *Empty) error {
+	s.d.log.Write(audit.Entry{Kind: "admin", Cmd: "stop", Decision: "allow"})
+	s.d.mu.Lock()
+	ln := s.d.ln
+	s.d.mu.Unlock()
+	if ln != nil {
+		go func() { time.Sleep(100 * time.Millisecond); ln.Close() }() // let the reply go out first
+	}
+	return nil
+}
+
 func (s *Service) HostList(_ *Empty, r *HostListReply) error {
 	cfg, _, _, _ := s.d.snapshot()
 	r.Hosts, r.Trusted = map[string]hosts.Host{}, map[string]bool{}

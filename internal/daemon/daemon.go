@@ -39,6 +39,7 @@ const outRetention = 7 * 24 * time.Hour
 
 type Daemon struct {
 	mu       sync.Mutex
+	ln       net.Listener // set by ServeListener; closed by Shutdown
 	engine   *policy.Engine
 	cfg      *hosts.Config
 	data     *vault.Data // nil while locked
@@ -358,6 +359,9 @@ func (d *Daemon) ServeListener(ln net.Listener) error {
 	if err := srv.RegisterName("A", &Service{d}); err != nil {
 		return err
 	}
+	d.mu.Lock()
+	d.ln = ln
+	d.mu.Unlock()
 	for {
 		c, err := ln.Accept()
 		if err != nil {

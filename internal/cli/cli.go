@@ -31,6 +31,8 @@ For agents:
 
 For the human user (need a real terminal; approvals and admin commands are confirmed
 in an OS authentication dialog, or with a code from a desktop notification as a fallback):
+  ostiary open                       open the Ostiary app (starts the daemon if needed)
+  ostiary stop                       stop the daemon
   ostiary init [--passphrase] | unlock | lock | approve | reload | doctor | ui | daemon | install-polkit | install-service | uninstall-service
   ostiary host add|edit|ls|rm|trust ...
   ostiary key gen|import|export|ls|rm ...
@@ -61,6 +63,9 @@ var guidance = map[int]string{
 // Main runs a subcommand and returns the process exit code.
 func Main(args []string) int {
 	if len(args) == 0 {
+		if exe, err := os.Executable(); err == nil && appDefault(exe) {
+			return cmdOpen(nil)
+		}
 		fmt.Print(usage)
 		return 2
 	}
@@ -69,7 +74,7 @@ func Main(args []string) int {
 		"job": cmdJob, "explain": cmdExplain, "hook": cmdHook,
 		"init": cmdInit, "unlock": cmdUnlock, "lock": cmdLock, "approve": cmdApprove,
 		"reload": cmdReload, "host": cmdHost, "key": cmdKey, "log": cmdLog, "doctor": cmdDoctor, "ui": cmdUI,
-		"install-hooks": cmdInstallHooks, "daemon": cmdDaemon, "install-polkit": cmdInstallPolkit, "install-service": cmdInstallService, "uninstall-service": cmdUninstallService, "mcp": cmdMCP,
+		"install-hooks": cmdInstallHooks, "daemon": cmdDaemon, "install-polkit": cmdInstallPolkit, "install-service": cmdInstallService, "uninstall-service": cmdUninstallService, "mcp": cmdMCP, "open": cmdOpen, "stop": cmdStop,
 		"version": func([]string) int { fmt.Println("ostiary", Version); return 0 },
 	}
 	if f, ok := cmds[args[0]]; ok {

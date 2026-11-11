@@ -97,7 +97,7 @@ func Claude(in io.Reader, out io.Writer, protected []string, explain Explainer) 
 
 var (
 	directSSH  = map[string]bool{"ssh": true, "scp": true, "sftp": true, "mosh": true, "slogin": true}
-	humanOnly  = map[string]bool{"approve": true, "key": true, "reload": true, "host": true, "init": true, "install-hooks": true, "unlock": true, "daemon": true, "install-service": true, "ui": true, "open": true, "upgrade": true, "uninstall-service": true}
+	humanOnly  = map[string]bool{"approve": true, "key": true, "reload": true, "host": true, "init": true, "install-hooks": true, "unlock": true, "daemon": true, "install-service": true, "ui": true, "open": true, "stop": true, "upgrade": true, "uninstall-service": true}
 	readOnlyUs = map[string]bool{"hosts": true, "out": true, "explain": true, "help": true, "version": true}
 	// A restarted daemon picks its auth mode again, so stopping it is human only.
 	stopTools = map[string]bool{"systemctl": true, "pkill": true, "kill": true, "killall": true, "launchctl": true}

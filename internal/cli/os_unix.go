@@ -115,6 +115,25 @@ func plistPath(home string) string {
 }
 
 // removeService drops the login autostart; the running daemon is left alone.
+// startService starts the installed autostart service now.
+func startService() error {
+	if runtime.GOOS == "linux" {
+		return runOut("systemctl", "--user", "start", "ostiary.service")
+	}
+	if runOut("launchctl", "kickstart", fmt.Sprintf("gui/%d/dev.ostiary", os.Getuid())) == nil {
+		return nil
+	}
+	home, _ := os.UserHomeDir()
+	return runOut("launchctl", "load", "-w", plistPath(home))
+}
+
+func runOut(name string, args ...string) error {
+	if out, err := exec.Command(name, args...).CombinedOutput(); err != nil {
+		return fmt.Errorf("%s: %v: %s", name, err, out)
+	}
+	return nil
+}
+
 func removeService() error {
 	home, _ := os.UserHomeDir()
 	p := plistPath(home)

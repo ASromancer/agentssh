@@ -801,3 +801,19 @@ func TestBeginFailsFastWhenLocked(t *testing.T) {
 		}
 	}
 }
+
+func TestShutdown(t *testing.T) {
+	h := setup(t) // setup already serves; start a second daemon-less check via RPC
+	if !Running() {
+		t.Fatal("not running")
+	}
+	if err := h.call("Shutdown", &Empty{}, &Empty{}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 40 && Running(); i++ {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if Running() {
+		t.Fatal("still running after Shutdown")
+	}
+}

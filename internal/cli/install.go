@@ -17,7 +17,7 @@ import (
 // docs as of 2026-11; see README "Agents".
 
 var sshTools = []string{"ssh", "scp", "sftp", "mosh", "slogin"}
-var humanOnlySubs = []string{"approve", "key", "reload", "host", "init", "install-hooks", "unlock", "daemon", "install-service", "uninstall-service", "ui"}
+var humanOnlySubs = []string{"approve", "key", "reload", "host", "init", "install-hooks", "unlock", "daemon", "install-service", "uninstall-service", "ui", "open", "stop", "upgrade"}
 
 type agentInstaller struct {
 	name    string
@@ -105,7 +105,7 @@ func codexHome(home string) string {
 // hookCommand is quoted with forward slashes so it works from sh, Git Bash
 // and cmd.exe alike.
 func hookCommand(agent string) (string, error) {
-	exe, err := os.Executable()
+	exe, err := cliExe()
 	if err != nil {
 		return "", err
 	}
