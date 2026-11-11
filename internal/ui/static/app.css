@@ -420,3 +420,5 @@ td.nowrap { white-space: nowrap; color: var(--text2); }
   table.cards.stack td:empty { display: none; }
   table.cards.stack td:last-child .btn { width: 100%; }
 }
+
+a { color: var(--accent); text-underline-offset: 2px; }
