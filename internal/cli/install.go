@@ -16,7 +16,7 @@ import (
 // docs as of 2026-11; see README "Agents".
 
 var sshTools = []string{"ssh", "scp", "sftp", "mosh", "slogin"}
-var humanOnlySubs = []string{"approve", "key", "reload", "host", "init", "install-hooks", "unlock"}
+var humanOnlySubs = []string{"approve", "key", "reload", "host", "init", "install-hooks", "unlock", "daemon"}
 
 type agentInstaller struct {
 	name    string

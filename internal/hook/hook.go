@@ -96,7 +96,7 @@ func Claude(in io.Reader, out io.Writer, protected []string, explain Explainer) 
 
 var (
 	directSSH  = map[string]bool{"ssh": true, "scp": true, "sftp": true, "mosh": true, "slogin": true}
-	humanOnly  = map[string]bool{"approve": true, "key": true, "reload": true, "host": true, "init": true, "install-hooks": true, "unlock": true}
+	humanOnly  = map[string]bool{"approve": true, "key": true, "reload": true, "host": true, "init": true, "install-hooks": true, "unlock": true, "daemon": true}
 	readOnlyUs = map[string]bool{"hosts": true, "out": true, "explain": true, "help": true, "version": true}
 )
 
@@ -195,6 +195,10 @@ func runArgs(args []string) (host, cmd string, ok bool) {
 }
 
 func bash(cmd, cwd string, protected []string, explain Explainer) (string, string) {
+	// Restarting the daemon with another environment can switch it to codes.
+	if l := strings.ToLower(cmd); strings.Contains(l, "agentssh_os_auth") || strings.Contains(l, "agentssh.service") {
+		return "deny", "changing how agentssh authenticates is for the human user only"
+	}
 	calls, writes, err := policy.Calls(cmd)
 	if err != nil {
 		return "", ""

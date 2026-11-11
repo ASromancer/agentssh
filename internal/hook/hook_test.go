@@ -77,6 +77,12 @@ func TestBash(t *testing.T) {
 		{`SSH.exe web1`, "deny"},
 		{`rsync -av C:/src/ D:/backup/`, ""},
 		{`cat $APPDATA/agentssh/hosts.toml`, "ask"},
+		// Restarting the daemon could switch it to codes: human only.
+		{`agentssh daemon --detach`, "deny"},
+		{`AGENTSSH_OS_AUTH=0 agentssh daemon`, "deny"},
+		{`systemctl --user restart agentssh.service`, "deny"},
+		{`systemctl --user set-environment AGENTSSH_OS_AUTH=0`, "deny"},
+		{`$env:agentssh_os_auth = "0"`, "deny"},
 	} {
 		if got := run(t, "Bash", map[string]any{"command": tc.cmd}); got != tc.want {
 			t.Errorf("%s: got %q want %q", tc.cmd, got, tc.want)
