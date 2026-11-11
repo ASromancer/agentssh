@@ -23,7 +23,7 @@ agentssh init        # vault + master key in the OS keyring (or --passphrase), i
 
 The static build (`CGO_ENABLED=0`) ignores `LD_PRELOAD`, which a dynamic binary would load into the daemon.
 
-**Upgrading** from v0.1.x: run `agentssh install-service` once (Linux; it rewrites the user unit to start with your desktop session), then `sudo agentssh install-polkit` if you want OS authentication.
+**Upgrading** from v0.1.x: run `agentssh install-service` once (Linux; it rewrites the user unit to start with your desktop session), then `sudo "$(command -v agentssh)" install-polkit` if you want OS authentication (`sudo` does not search `~/.local/bin`).
 
 `init` imports hosts from `~/.ssh/config`, but agents can't see any of them until you enable each one.
 
@@ -140,7 +140,7 @@ The daemon reads `hosts.toml` and `rules.toml` only at startup and on `agentssh 
 
 Approvals and admin operations (key generation, host edits, ...) are confirmed through your operating system's authentication dialog, opened by the daemon itself:
 
-- **Linux (on by default):** polkit (password prompt). Run `sudo agentssh install-polkit` once from your own account, then `systemctl --user restart agentssh`. It needs a local graphical session (a forwarded X display does not count); the user service starts with that session (`graphical-session.target`).
+- **Linux (on by default):** polkit (password prompt). Run `sudo "$(command -v agentssh)" install-polkit` once from your own account (plain `sudo agentssh` fails when the binary is in `~/.local/bin`), then `systemctl --user restart agentssh`. It needs a local graphical session (a forwarded X display does not count); the user service starts with that session (`graphical-session.target`).
 - **macOS (off by default):** Touch ID, or your macOS password.
 - **Windows (off by default):** your Windows password.
 
