@@ -226,3 +226,8 @@ Khi xác thực HĐH đang hoạt động, nội dung thông báo không còn m�
 4. `internal/ui`: server, bảo mật, API, SSE và 4 màn hình.
 5. `internal/tray` và thông báo bấm được.
 6. `doctor`, README (mô hình đe dọa cập nhật theo mục 4), CI macOS cgo, phát hành v0.2.0.
+
+## §9 Amendments (2026-11-11)
+
+- Token trong URL (§5) được thay bằng nonce đăng nhập dùng một lần (hạn 10 phút). `agentssh ui` xin nonce từ daemon qua unix socket; không còn file `ui.url`. Session hết hạn sau 8 giờ không dùng.
+- Hoãn lại, chưa làm: đếm ngược thời gian chờ duyệt; trạng thái "host key đã đổi" ở màn Host; lọc nhật ký theo khoảng ngày (chỉ có `since`); số yêu cầu chờ trên chính icon khay (hiện chỉ ở tooltip); kiểm tra tray/AppIndicator trong `doctor`.
