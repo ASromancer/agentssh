@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -65,13 +66,23 @@ func testServer(t *testing.T, clientKey ssh.PublicKey) (addr string, hostKey ssh
 	return ln.Addr().String(), signer.PublicKey()
 }
 
+// shell runs remote commands in the fake server (Git's sh on Windows).
+var shell = func() string {
+	for _, s := range []string{"sh", "bash"} {
+		if p, err := exec.LookPath(s); err == nil {
+			return p
+		}
+	}
+	return ""
+}()
+
 func serveSession(ch ssh.Channel, reqs <-chan *ssh.Request) {
 	defer ch.Close()
 	for req := range reqs {
 		switch req.Type {
 		case "exec":
 			n := binary.BigEndian.Uint32(req.Payload)
-			cmd := exec.Command("sh", "-c", string(req.Payload[4:4+n]))
+			cmd := exec.Command(shell, "-c", string(req.Payload[4:4+n]))
 			cmd.Stdout, cmd.Stderr = ch, ch.Stderr()
 			req.Reply(true, nil)
 			cmd.Start()
@@ -147,10 +158,17 @@ func (h *harness) exec(a ExecArgs) ExecReply {
 }
 
 func setup(t *testing.T) *harness {
+	if shell == "" {
+		t.Skip("no sh/bash to act as the remote shell")
+	}
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, "cfg"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "state"))
-	sockDir, _ := os.MkdirTemp("/tmp", "agentssh-test")
+	sockBase := "/tmp" // short: unix socket paths are limited to ~104 bytes
+	if runtime.GOOS == "windows" {
+		sockBase = ""
+	}
+	sockDir, _ := os.MkdirTemp(sockBase, "agentssh-test")
 	t.Cleanup(func() { os.RemoveAll(sockDir) })
 	t.Setenv("AGENTSSH_SOCKET", filepath.Join(sockDir, "s"))
 
@@ -181,7 +199,8 @@ key = "k1"
 		t.Fatal(err)
 	}
 
-	h := &harness{t: t, tmp: tmp, remote: t.TempDir()}
+	// Remote paths go through sh: forward slashes work on Windows too.
+	h := &harness{t: t, tmp: tmp, remote: filepath.ToSlash(t.TempDir())}
 	d, err := New(h.notify, 3*time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -242,7 +261,7 @@ func TestDaemonEndToEnd(t *testing.T) {
 	}
 
 	// Destructive: pending, approve with the notified code, then it runs.
-	victim := filepath.Join(h.remote, "victim")
+	victim := h.remote + "/victim"
 	os.WriteFile(victim, []byte("x"), 0o600)
 	rm := ExecArgs{Cmd: "rm " + victim}
 	r = h.exec(rm)
@@ -280,7 +299,7 @@ func TestDaemonEndToEnd(t *testing.T) {
 	// Transfers.
 	local := filepath.Join(h.tmp, "up.txt")
 	os.WriteFile(local, []byte("payload"), 0o600)
-	remote := filepath.Join(h.remote, "up.txt")
+	remote := h.remote + "/up.txt"
 	if r := h.exec(ExecArgs{Kind: "put", Local: local, Remote: remote}); r.Code != 0 || r.Exit != 0 {
 		t.Fatalf("put: %+v", r)
 	}

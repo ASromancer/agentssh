@@ -61,7 +61,8 @@ func installClaude() error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if added := addClaudeHook(settings, exe+" hook claude"); added {
+	// Quoted, forward slashes: works from sh, Git Bash and cmd.exe alike.
+	if added := addClaudeHook(settings, `"`+filepath.ToSlash(exe)+`" hook claude`); added {
 		b, _ := json.MarshalIndent(settings, "", "  ")
 		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 			return err

@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 
 	"github.com/zalando/go-keyring"
 	"golang.org/x/crypto/argon2"
@@ -131,7 +130,7 @@ func Open(path string, key *[32]byte) (*Data, error) {
 	}
 	for _, m := range []map[string][]byte{d.Keys, d.Passwords} {
 		for _, v := range m {
-			_ = syscall.Mlock(v) // best effort; RLIMIT_MEMLOCK may forbid it
+			lockMemory(v) // best effort
 		}
 	}
 	return d, nil

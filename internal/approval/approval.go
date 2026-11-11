@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -254,6 +255,10 @@ func Desktop(title, body string) error {
 	case "darwin":
 		q := func(s string) string { return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"` }
 		cmd = exec.Command("osascript", "-e", "display notification "+q(body)+" with title "+q(title))
+	case "windows":
+		// Title and body go through the environment, never into the script.
+		cmd = exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", windowsToast)
+		cmd.Env = append(os.Environ(), "AGENTSSH_TITLE="+title, "AGENTSSH_BODY="+body)
 	default:
 		return errors.New("desktop notifications not supported on " + runtime.GOOS)
 	}
@@ -263,3 +268,14 @@ func Desktop(title, body string) error {
 	}
 	return nil
 }
+
+// windowsToast shows a toast as Windows PowerShell's own app id, which is
+// registered on every Windows 10/11 install.
+const windowsToast = `$ErrorActionPreference = 'Stop'
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+$t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+$x = $t.GetElementsByTagName('text')
+$x.Item(0).AppendChild($t.CreateTextNode($env:AGENTSSH_TITLE)) | Out-Null
+$x.Item(1).AppendChild($t.CreateTextNode($env:AGENTSSH_BODY)) | Out-Null
+$app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show([Windows.UI.Notifications.ToastNotification]::new($t))`

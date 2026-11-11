@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/rpc"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/ASromancer/agentssh/internal/daemon"
@@ -82,7 +81,7 @@ func agentFail(code int, msg string) int {
 func dial() (*rpc.Client, int) {
 	c, err := daemon.Dial()
 	if err != nil {
-		return nil, agentFail(daemon.CodeNoDaemon, "daemon is not running (systemctl --user start agentssh, or 'agentssh daemon')")
+		return nil, agentFail(daemon.CodeNoDaemon, "daemon is not running (systemctl --user start agentssh, or 'agentssh daemon --detach')")
 	}
 	return c, 0
 }
@@ -134,22 +133,23 @@ type multi []string
 func (m *multi) String() string     { return strings.Join(*m, ",") }
 func (m *multi) Set(v string) error { *m = append(*m, v); return nil }
 
-// term is the controlling terminal. Human-only commands insist on it so an
-// agent driving a pipe cannot answer the prompts.
+// term is the controlling terminal (/dev/tty, or CONIN$/CONOUT$ on
+// Windows). Human-only commands insist on it so an agent driving a pipe
+// cannot answer the prompts.
 type term struct {
-	f *os.File
-	r *bufio.Reader
+	in, out *os.File
+	r       *bufio.Reader
 }
 
 func openTTY(what string) (*term, int) {
-	f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	in, out, err := openConsole()
 	if err != nil {
-		return nil, errf(2, "%s must be run by the user in a real terminal (/dev/tty: %v)", what, err)
+		return nil, errf(2, "%s must be run by the user in a real terminal (%v)", what, err)
 	}
-	return &term{f, bufio.NewReader(f)}, 0
+	return &term{in, out, bufio.NewReader(in)}, 0
 }
 
-func (t *term) printf(format string, a ...any) { fmt.Fprintf(t.f, format, a...) }
+func (t *term) printf(format string, a ...any) { fmt.Fprintf(t.out, format, a...) }
 
 func (t *term) prompt(p string) string {
 	t.printf("%s", p)
@@ -158,13 +158,9 @@ func (t *term) prompt(p string) string {
 }
 
 func (t *term) secret(p string) string {
-	off := exec.Command("stty", "-echo")
-	off.Stdin = t.f
-	_ = off.Run()
+	restore := echoOff(t.in)
 	defer func() {
-		on := exec.Command("stty", "echo")
-		on.Stdin = t.f
-		_ = on.Run()
+		restore()
 		t.printf("\n")
 	}()
 	return t.prompt(p)

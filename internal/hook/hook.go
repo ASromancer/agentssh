@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ASromancer/agentssh/internal/paths"
 	"github.com/ASromancer/agentssh/internal/policy"
 )
 
@@ -82,7 +83,7 @@ func inside(p, cwd string, dirs []string) bool {
 	}
 	for _, c := range cands {
 		for _, d := range dirs {
-			if c == d || strings.HasPrefix(c, d+string(filepath.Separator)) {
+			if paths.Within(c, d) {
 				return true
 			}
 		}
@@ -96,6 +97,9 @@ func remoteArg(a string) bool {
 		return true
 	}
 	if strings.HasPrefix(a, "-") || strings.HasPrefix(a, "/") || strings.HasPrefix(a, ".") {
+		return false
+	}
+	if len(a) >= 2 && a[1] == ':' && (a[0]|0x20 >= 'a' && a[0]|0x20 <= 'z') { // C:\ or C:/ on Windows
 		return false
 	}
 	i := strings.Index(a, ":")
@@ -129,7 +133,8 @@ func bash(cmd, cwd string, protected []string, explain Explainer) (string, strin
 	ours := len(calls) > 0 && !writes
 	var ask string
 	for _, argv := range calls {
-		name := argv[0]
+		// Git Bash on Windows: SSH.exe, agentssh.exe
+		name := strings.TrimSuffix(strings.ToLower(argv[0]), ".exe")
 		switch {
 		case directSSH[name]:
 			return "deny", fmt.Sprintf("do not call %s directly; use 'agentssh run <host> \"<cmd>\"' (see 'agentssh hosts')", name)
@@ -190,11 +195,11 @@ func bash(cmd, cwd string, protected []string, explain Explainer) (string, strin
 }
 
 func mentions(cmd string, dirs []string) bool {
-	if strings.Contains(cmd, ".config/agentssh") || strings.Contains(cmd, ".local/state/agentssh") {
-		return true
-	}
-	for _, d := range dirs {
-		if strings.Contains(cmd, d) {
+	norm := func(s string) string { return strings.ToLower(strings.ReplaceAll(s, `\`, "/")) }
+	c := norm(cmd)
+	for _, d := range append([]string{".config/agentssh", ".local/state/agentssh", "appdata/roaming/agentssh",
+		"appdata/local/agentssh", "$appdata/agentssh", "$localappdata/agentssh"}, dirs...) {
+		if strings.Contains(c, norm(d)) {
 			return true
 		}
 	}

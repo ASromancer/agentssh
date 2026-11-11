@@ -10,9 +10,7 @@ import (
 	"io"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -30,6 +28,26 @@ import (
 const approvalTimeout = 120 * time.Second
 
 func cmdDaemon(args []string) int {
+	fs := newFlags("daemon")
+	detach := fs.Bool("detach", false, "start the daemon in the background and return")
+	logFile := fs.String("log", "", "append logs to this file")
+	if _, err := parse(fs, args); err != nil {
+		return 2
+	}
+	if *detach {
+		if err := startDetached(filepath.Join(paths.State(), "daemon.log")); err != nil {
+			return errf(1, "%v", err)
+		}
+		return 0
+	}
+	if *logFile != "" {
+		os.MkdirAll(filepath.Dir(*logFile), 0o700)
+		f, err := os.OpenFile(*logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			return errf(1, "%v", err)
+		}
+		log.SetOutput(f)
+	}
 	d, err := daemon.New(approval.Desktop, approvalTimeout)
 	if err != nil {
 		return errf(1, "%v", err)
@@ -505,7 +523,7 @@ func cmdDoctor(args []string) int {
 	warn := func(s string) { problems++; fmt.Println("WARN  " + s) }
 
 	if c, err := daemon.Dial(); err != nil {
-		warn("daemon is not running (systemctl --user start agentssh / agentssh daemon)")
+		warn("daemon is not running (systemctl --user start agentssh, or agentssh daemon --detach)")
 	} else {
 		var st daemon.StatusReply
 		if err := c.Call("A.Status", &daemon.Empty{}, &st); err != nil {
@@ -529,7 +547,7 @@ func cmdDoctor(args []string) int {
 
 	home, _ := os.UserHomeDir()
 	settings, _ := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
-	if strings.Contains(string(settings), "agentssh hook claude") {
+	if strings.Contains(string(settings), "hook claude") {
 		ok("Claude Code hook installed")
 	} else {
 		warn("Claude Code hook not installed: mutate commands on 'standard' hosts run without asking (agentssh install-hooks claude)")
@@ -644,49 +662,6 @@ Next steps:
   agentssh doctor
 `)
 	return 0
-}
-
-func installService() error {
-	exe, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	home, _ := os.UserHomeDir()
-	switch runtime.GOOS {
-	case "linux":
-		p := filepath.Join(home, ".config", "systemd", "user", "agentssh.service")
-		unit := fmt.Sprintf("[Unit]\nDescription=agentssh daemon\n\n[Service]\nExecStart=%s daemon\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n", exe)
-		if err := writeFile(p, unit); err != nil {
-			return err
-		}
-		if out, err := exec.Command("systemctl", "--user", "daemon-reload").CombinedOutput(); err != nil {
-			return fmt.Errorf("%v: %s", err, out)
-		}
-		if out, err := exec.Command("systemctl", "--user", "enable", "--now", "agentssh.service").CombinedOutput(); err != nil {
-			return fmt.Errorf("%v: %s", err, out)
-		}
-	case "darwin":
-		p := filepath.Join(home, "Library", "LaunchAgents", "dev.agentssh.plist")
-		plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>dev.agentssh</string>
-  <key>ProgramArguments</key><array><string>%s</string><string>daemon</string></array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-</dict></plist>
-`, exe)
-		if err := writeFile(p, plist); err != nil {
-			return err
-		}
-		if out, err := exec.Command("launchctl", "load", "-w", p).CombinedOutput(); err != nil {
-			return fmt.Errorf("%v: %s", err, out)
-		}
-	default:
-		return fmt.Errorf("no service manager support for %s; run 'agentssh daemon' yourself", runtime.GOOS)
-	}
-	fmt.Println("service installed and started")
-	return nil
 }
 
 func writeFile(p, content string) error {

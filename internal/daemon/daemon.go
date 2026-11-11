@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -179,14 +180,14 @@ func (d *Daemon) Serve() error {
 		return errors.New("daemon already running on " + sock)
 	}
 	os.Remove(sock)
-	old := syscall.Umask(0o077)
+	old := umask(0o077)
 	ln, err := net.Listen("unix", sock)
-	syscall.Umask(old)
+	umask(old)
 	if err != nil {
 		return err
 	}
-	if err := os.Chmod(sock, 0o600); err != nil {
-		return err
+	if err := os.Chmod(sock, 0o600); err != nil && runtime.GOOS != "windows" {
+		return err // on Windows the per-user AppData ACL protects the socket
 	}
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -221,9 +222,8 @@ func (d *Daemon) ServeListener(ln net.Listener) error {
 		if err != nil {
 			return err
 		}
-		uid, err := peerUID(c)
-		if err != nil || uid != os.Getuid() {
-			log.Printf("rejected connection from uid %d (%v)", uid, err)
+		if err := checkPeer(c); err != nil {
+			log.Printf("rejected connection: %v", err)
 			c.Close()
 			continue
 		}
@@ -231,19 +231,19 @@ func (d *Daemon) ServeListener(ln net.Listener) error {
 	}
 }
 
-func peerUID(c net.Conn) (int, error) {
+// checkPeer accepts only processes running as the same user.
+func checkPeer(c net.Conn) error {
 	uc, ok := c.(*net.UnixConn)
 	if !ok {
-		return -1, errors.New("not a unix socket")
+		return errors.New("not a unix socket")
 	}
 	raw, err := uc.SyscallConn()
 	if err != nil {
-		return -1, err
+		return err
 	}
-	uid := -1
 	var cerr error
-	if err := raw.Control(func(fd uintptr) { uid, cerr = peerUIDFd(int(fd)) }); err != nil {
-		return -1, err
+	if err := raw.Control(func(fd uintptr) { cerr = samePeerUser(fd) }); err != nil {
+		return err
 	}
-	return uid, cerr
+	return cerr
 }

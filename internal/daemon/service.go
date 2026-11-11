@@ -81,7 +81,7 @@ func localProblem(eng *policy.Engine, p string) string {
 	}
 	for _, c := range check {
 		for _, dir := range []string{paths.Config(), paths.State()} {
-			if c == dir || strings.HasPrefix(c, dir+string(filepath.Separator)) {
+			if paths.Within(c, dir) {
 				return "local path is inside agentssh's own files"
 			}
 		}
