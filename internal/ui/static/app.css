@@ -382,3 +382,14 @@ td.nowrap { white-space: nowrap; color: var(--text2); }
 }
 .side-foot { flex-wrap: wrap; }
 .side-foot .linkbtn { flex: 1 0 100%; text-align: left; margin: 0 0 4px; }
+
+/* approvals: vault warning, expired cards, lost session */
+#noreqwarn { position: static; align-items: center; border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: color-mix(in srgb, var(--warn) 10%, var(--s1)); }
+#noreqwarn .ic { color: var(--warn); margin-top: 0; }
+#noreqwarn > div { flex: 1; }
+.agentrow .muted { flex: 2; min-width: 0; font-size: var(--f12); }
+.req.expired { opacity: .65; }
+.expiredmsg { margin-top: 10px; color: var(--muted); font-size: var(--f13); }
+.sessionlost { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 24px; background: var(--bg); }
+.sessionlost .card { max-width: 440px; padding: 28px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.sessionlost .ic { color: var(--warn); }

@@ -61,6 +61,14 @@ func (s *Service) Begin(a *BeginArgs, r *BeginReply) error {
 		return fmt.Errorf("unknown admin op %q", a.Op)
 	}
 	switch a.Op {
+	case "reload", "host-set", "host-rm", "key-gen", "key-import", "key-rm", "key-export":
+		// Fail before a ticket or dialog exists: Admin would reject these anyway, after the human authenticated.
+		s.d.mu.Lock()
+		locked := s.d.data == nil
+		s.d.mu.Unlock()
+		if locked {
+			return errors.New("vault is locked; run 'ostiary unlock' first")
+		}
 	case "init":
 		if _, err := os.Stat(paths.Vault()); err == nil {
 			return errors.New("already initialized")

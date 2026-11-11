@@ -765,3 +765,14 @@ func TestUILogin(t *testing.T) {
 		t.Fatalf("UI %q", st.UI)
 	}
 }
+
+func TestBeginFailsFastWhenLocked(t *testing.T) {
+	h := setup(t)
+	var br BeginReply
+	for _, op := range []string{"host-set", "host-rm", "reload", "key-gen", "key-import", "key-rm", "key-export"} {
+		err := h.call("Begin", &BeginArgs{Op: op, Name: "x"}, &br)
+		if err == nil || !strings.Contains(err.Error(), "vault is locked") || br.Ticket != 0 {
+			t.Fatalf("%s: err=%v reply=%+v", op, err, br)
+		}
+	}
+}

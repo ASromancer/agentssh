@@ -26,6 +26,9 @@ jobs:
       - name: UI highlight offsets
         if: runner.os == 'Linux'
         run: node internal/ui/testdata/highlight_test.mjs
+      - name: UI error translation
+        if: runner.os == 'Linux'
+        run: node internal/ui/testdata/errors_test.mjs
       - name: e2e against a real OpenSSH server
         if: runner.os != 'Windows'
         run: |
