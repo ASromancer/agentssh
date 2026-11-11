@@ -60,7 +60,9 @@ func cmdDaemon(args []string) int {
 	return 0
 }
 
-// admin runs a code-protected admin operation (spec 5.2).
+// admin runs an admin operation confirmed by OS authentication or, as a
+// fallback, a code. If OS authentication breaks, the daemon switches to
+// codes and the error asks the user to run the command again.
 func admin(t *term, a daemon.AdminArgs) (string, int) {
 	c, code := dial()
 	if c == nil {
@@ -222,7 +224,7 @@ func cmdApprove(args []string) int {
 			continue
 		}
 		for _, r := range reqs {
-			decideOne(t, c, r, osAuth)
+			decideOne(t, c, r, &osAuth)
 			handled++
 		}
 	}
@@ -230,7 +232,7 @@ func cmdApprove(args []string) int {
 
 func decideOne(t *term, c interface {
 	Call(string, any, any) error
-}, r approval.Request, osAuth bool) {
+}, r approval.Request, osAuth *bool) {
 	t.printf("\n%s#%d%s  %s  agent=%s  kind=%s\n", bold, r.ID, reset, r.Time.Format("2006-01-02 15:04:05"), orDash(r.Agent), r.Kind)
 	t.printf("host:  %s (user %s)\ncwd:   %s\nrepo:  %s\n", r.Host, orDash(r.User), orDash(r.Cwd), orDash(r.Repo))
 	t.printf("level: %s%s%s\n", red, strings.ToUpper(r.Level), reset)
@@ -261,7 +263,7 @@ func decideOne(t *term, c interface {
 		}
 		switch {
 		case choice == "n":
-		case osAuth:
+		case *osAuth:
 			t.printf("confirm in the system authentication dialog…\n")
 		default:
 			code = t.prompt("approval code (from the desktop notification): ")
@@ -272,7 +274,21 @@ func decideOne(t *term, c interface {
 			return
 		}
 		t.printf("%v\n", err)
-		if !strings.Contains(err.Error(), "tries left") && !strings.Contains(err.Error(), "not confirmed") {
+		if strings.Contains(err.Error(), "switched to codes") {
+			// The daemon fell back to codes for good; the code is in a
+			// notification, or in the request if that failed.
+			*osAuth = false
+			var reqs []approval.Request
+			_ = c.Call("A.Pending", &daemon.Empty{}, &reqs)
+			for _, p := range reqs {
+				if p.ID == r.ID && p.Code != "" {
+					t.printf("desktop notification failed; approval code: %s\n", p.Code)
+				}
+			}
+			continue
+		}
+		if !strings.Contains(err.Error(), "tries left") && !strings.Contains(err.Error(), "not confirmed") &&
+			!strings.Contains(err.Error(), "already in progress") {
 			return
 		}
 	}

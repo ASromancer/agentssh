@@ -22,7 +22,8 @@ ENV = {k: v for k, v in os.environ.items() if k not in ("DISPLAY", "WAYLAND_DISP
 ENV.update(HOME=HOME, XDG_CONFIG_HOME=f"{HOME}/.config", XDG_STATE_HOME=f"{HOME}/.local/state",
            XDG_RUNTIME_DIR=f"{TMP}/run", AGENTSSH_SOCKET=f"{TMP}/s.sock",
            DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent", TERM="dumb",
-           CLAUDECODE="1")  # agent calls come from Claude Code unless a test says otherwise
+           CLAUDECODE="1",  # agent calls come from Claude Code unless a test says otherwise
+           AGENTSSH_OS_AUTH="0")  # the plain daemon stays in code mode; the fake part turns it on
 os.makedirs(ENV["XDG_RUNTIME_DIR"], mode=0o700)
 NOTES = os.path.join(TMP, "notifications.log")
 os.makedirs(f"{TMP}/bin")
@@ -423,6 +424,7 @@ def main():
             gate = os.path.join(TMP, "humanok")
             open(gate, "w").write("deny")
             ENV["AGENTSSH_E2E_HUMANOK"] = gate
+            ENV["AGENTSSH_OS_AUTH"] = "1"  # OS mode on every OS for the fake confirmer
             out = subprocess.run([FAKE_BIN, "daemon", "--detach"], env=ENV, capture_output=True, text=True).stdout
             daemon_pid = int(re.search(r"pid (\d+)", out).group(1))
             for _ in range(50):
@@ -456,6 +458,28 @@ def main():
             t = Tty("key", "gen", "osauth")
             t.expect(r"ssh-ed25519 ")
             check(t.wait() == 0 and "key-gen osauth" in open(gate + ".log").read(), "admin op via OS authentication")
+            # The OS dialog breaks: the daemon switches to codes for good.
+            open(gate, "w").write("unavailable")
+            victim5 = os.path.join(remote, "victim5")
+            open(victim5, "w").write("x")
+            agent = subprocess.Popen([BIN, "run", "e2e", f"rm {victim5}"], env=ENV, stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            t = Tty("approve")
+            t.expect(r"DESTRUCTIVE")
+            t.expect(r"\[y\] once")
+            t.send("y")
+            t.expect("switched to codes")
+            t.expect(r"\[y\] once")
+            t.send("y")
+            t.expect(r"approval code \(from the desktop notification\): ")
+            t.send(last_code())
+            t.expect("approved once")
+            out, err = agent.communicate(timeout=30)
+            check(agent.returncode == 0 and not os.path.exists(victim5),
+                  "OS dialog breaks: approve falls back to a code", out + err)
+            t.p.kill()
+            rc, out, _ = run("doctor")
+            check("approvals use codes" in out and "switched to codes" in out, "doctor reports the fallback", out)
             ENV.pop("AGENTSSH_E2E_HUMANOK")
         os.kill(daemon_pid, signal.SIGTERM)
         daemon_pid = None
