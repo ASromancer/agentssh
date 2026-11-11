@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/ASromancer/ostiary/internal/brand"
 )
 
 //go:embed static
@@ -180,12 +182,25 @@ func (s *Server) handler() http.Handler {
 	mux := http.NewServeMux()
 	s.routes(mux)
 	sub, _ := fs.Sub(static, "static")
+	// brand assets come from the brand package, not the static FS.
+	brandFiles := map[string]struct {
+		ct   string
+		body []byte
+	}{
+		"/favicon.png":    {"image/png", brand.PNG(64)},
+		"/brand/mark.svg": {"image/svg+xml", brand.MarkSVG},
+	}
 	files := map[string][2]string{
 		"/":        {"index.html", "text/html; charset=utf-8"},
 		"/app.js":  {"app.js", "text/javascript; charset=utf-8"},
 		"/app.css": {"app.css", "text/css; charset=utf-8"},
 	}
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		if bf, ok := brandFiles[r.URL.Path]; ok {
+			w.Header().Set("Content-Type", bf.ct)
+			w.Write(bf.body)
+			return
+		}
 		f, ok := files[r.URL.Path]
 		if !ok {
 			http.Error(w, "not found", http.StatusNotFound)

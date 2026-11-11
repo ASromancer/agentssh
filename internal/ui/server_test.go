@@ -1,11 +1,14 @@
 package ui
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ASromancer/ostiary/internal/brand"
 )
 
 func testServer() *Server {
@@ -122,6 +125,21 @@ func TestStatic(t *testing.T) {
 	for p, ct := range map[string]string{"/": "text/html; charset=utf-8", "/app.js": "text/javascript; charset=utf-8", "/app.css": "text/css; charset=utf-8"} {
 		w := do(t, s, "GET", p, "127.0.0.1:8123", "", sess, "", "")
 		if w.Code != 200 || w.Header().Get("Content-Type") != ct {
+			t.Errorf("%s: %d %q", p, w.Code, w.Header().Get("Content-Type"))
+		}
+	}
+}
+
+func TestBrandAssets(t *testing.T) {
+	s := testServer()
+	sess := login(t, s)
+	for p, c := range map[string]struct {
+		ct   string
+		body []byte
+	}{"/favicon.png": {"image/png", brand.PNG(64)}, "/brand/mark.svg": {"image/svg+xml", brand.MarkSVG}} {
+		w := do(t, s, "GET", p, "127.0.0.1:8123", "", sess, "", "")
+		if w.Code != 200 || w.Header().Get("Content-Type") != c.ct || !bytes.Equal(w.Body.Bytes(), c.body) ||
+			w.Header().Get("Content-Security-Policy") != "default-src 'self'" {
 			t.Errorf("%s: %d %q", p, w.Code, w.Header().Get("Content-Type"))
 		}
 	}
