@@ -169,6 +169,10 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			}
 			sid := hex.EncodeToString(b)
 			s.mu.Lock()
+			if len(s.sessions) >= 64 {
+				// ponytail: cap of 64; older logins beyond that just re-login
+				s.sessions = map[string]bool{}
+			}
 			s.sessions[sid] = true
 			s.mu.Unlock()
 			http.SetCookie(w, &http.Cookie{Name: "agentssh", Value: sid, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})

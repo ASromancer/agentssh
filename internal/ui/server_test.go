@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -140,8 +141,11 @@ func TestURLFileMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, err := os.Stat(p)
-	if err != nil || st.Mode().Perm() != 0o600 {
-		t.Fatalf("mode: %v %v", st, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && st.Mode().Perm() != 0o600 { // Windows uses the profile ACL
+		t.Fatalf("mode: %v", st.Mode())
 	}
 	b, _ := os.ReadFile(p)
 	if string(b) != s.URL()+"\n" {
@@ -157,5 +161,16 @@ func TestURL(t *testing.T) {
 	s := testServer()
 	if s.URL() != "http://127.0.0.1:8123/?t="+testTok || s.Link(9) != s.URL()+"#req=9" {
 		t.Fatalf("%s %s", s.URL(), s.Link(9))
+	}
+}
+
+func TestSessionCap(t *testing.T) {
+	s := testServer()
+	var last string
+	for i := 0; i < 70; i++ {
+		last = login(t, s)
+	}
+	if w := do(t, s, "GET", "/", "127.0.0.1:8123", "", last, "", ""); w.Code != 200 {
+		t.Fatalf("latest session: %d", w.Code)
 	}
 }
