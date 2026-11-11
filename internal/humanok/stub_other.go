@@ -1,4 +1,4 @@
-//go:build !linux && !darwin && !e2efake
+//go:build !linux && !darwin && !windows && !e2efake
 
 package humanok
 
