@@ -1,6 +1,9 @@
 package approval
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestLocalURL(t *testing.T) {
 	for u, want := range map[string]bool{
@@ -20,5 +23,18 @@ func TestLocalURL(t *testing.T) {
 		if got := LocalURL(u); got != want {
 			t.Errorf("LocalURL(%q) = %v", u, got)
 		}
+	}
+}
+
+func TestOpenEnv(t *testing.T) {
+	env := []string{"BROWSER=/tmp/evil", "LD_PRELOAD=/tmp/evil.so", "PATH=/tmp/evil", "DISPLAY=:0", "XAUTHORITY=/x",
+		"XDG_CURRENT_DESKTOP=GNOME", "HOME=/home/u", "SystemRoot=C:\\Windows", "AGENTSSH_X=1"}
+	got := strings.Join(openEnv(env, "linux"), " ")
+	if want := "DISPLAY=:0 XAUTHORITY=/x XDG_CURRENT_DESKTOP=GNOME HOME=/home/u PATH=/usr/local/bin:/usr/bin:/bin"; got != want {
+		t.Errorf("linux:\n got %s\nwant %s", got, want)
+	}
+	got = strings.Join(openEnv(env, "windows"), " ")
+	if !strings.Contains(got, "SystemRoot=") || strings.Contains(got, "PATH=") || strings.Contains(got, "BROWSER") || strings.Contains(got, "LD_") {
+		t.Errorf("windows: %s", got)
 	}
 }

@@ -52,10 +52,34 @@ func OpenURL(u string) error {
 		return err
 	}
 	cmd := exec.Command(bin, args...)
-	cmd.Env = os.Environ() // the browser needs the user's full session
+	cmd.Env = openEnv(os.Environ(), runtime.GOOS)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
 	go cmd.Wait()
 	return nil
+}
+
+// openEnv keeps the session variables an opener needs. The daemon's
+// environment is not trusted: BROWSER, LD_PRELOAD and PATH never reach it.
+func openEnv(environ []string, goos string) []string {
+	keep := []string{"DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR",
+		"XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE", "XDG_DATA_DIRS", "XDG_CONFIG_DIRS", "HOME", "LANG", "LC_ALL"}
+	if goos == "windows" {
+		keep = append(keep, "SystemRoot", "USERPROFILE", "TEMP", "TMP", "LOCALAPPDATA", "APPDATA")
+	}
+	var out []string
+	for _, kv := range environ {
+		k, _, _ := strings.Cut(kv, "=")
+		for _, w := range keep {
+			if k == w || (goos == "windows" && strings.EqualFold(k, w)) {
+				out = append(out, kv)
+				break
+			}
+		}
+	}
+	if goos != "windows" {
+		out = append(out, "PATH=/usr/local/bin:/usr/bin:/bin")
+	}
+	return out
 }
