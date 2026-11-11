@@ -144,7 +144,10 @@ func (h *harness) call(method string, args, reply any) error {
 
 func (h *harness) exec(a ExecArgs) ExecReply {
 	h.t.Helper()
-	a.Env = Env{Cwd: h.tmp, Agent: "test"}
+	if a.Agent == "" {
+		a.Agent = AgentClaude
+	}
+	a.Env = Env{Cwd: h.tmp, Agent: a.Agent}
 	if a.Kind == "" {
 		a.Kind = "run"
 	}
@@ -251,6 +254,10 @@ func TestDaemonEndToEnd(t *testing.T) {
 	}
 	if r := h.exec(ExecArgs{Cmd: "sh -c 'exit 3'"}); r.Exit != 3 || r.Code != 0 {
 		t.Fatalf("exit code: %+v", r)
+	}
+	// Without Claude Code's soft ask, mutate on a standard host needs approval.
+	if r := h.exec(ExecArgs{Env: Env{Agent: "codex"}, Cmd: "sh -c 'exit 3'"}); r.Pending == 0 {
+		t.Fatalf("mutate from codex should need approval: %+v", r)
 	}
 	if r := h.exec(ExecArgs{Cmd: "seq 1 200"}); !strings.Contains(r.Output, "120 lines omitted") ||
 		!strings.HasPrefix(r.Output, "1\n") || !strings.HasSuffix(r.Output, "200\n") {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -360,10 +361,10 @@ func daemonExplain(host, cmd, cwd string) (string, error) {
 }
 
 func cmdHook(args []string) int {
-	if len(args) != 1 || args[0] != "claude" {
-		return errf(2, "usage: agentssh hook claude (reads a PreToolUse event on stdin)")
+	if len(args) != 1 || !slices.Contains(hook.Agents, args[0]) {
+		return errf(2, "usage: agentssh hook %s (reads a pre-tool event on stdin)", strings.Join(hook.Agents, "|"))
 	}
-	if err := hook.Claude(os.Stdin, os.Stdout, []string{paths.Config(), paths.State()}, daemonExplain); err != nil {
+	if err := hook.Run(args[0], os.Stdin, os.Stdout, []string{paths.Config(), paths.State()}, daemonExplain); err != nil {
 		// Never break the agent on a malformed event: no output = normal flow.
 		fmt.Fprintf(os.Stderr, "agentssh hook: %v\n", err)
 	}

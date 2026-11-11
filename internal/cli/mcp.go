@@ -74,9 +74,7 @@ func cmdMCP(args []string) int {
 		}
 		e.Cwd = abs
 	}
-	if e.Agent == "" {
-		e.Agent = "mcp"
-	}
+	e.Agent = "mcp" // no soft ask over MCP: mutate on standard hosts needs approval
 	s := &mcpServer{env: e, out: os.Stdout, dial: func() (rpcCaller, error) { return daemon.Dial() }}
 	if err := s.serve(os.Stdin); err != nil {
 		return errf(1, "%v", err)

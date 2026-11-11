@@ -3,14 +3,19 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ASromancer/agentssh/internal/daemon"
 )
 
 // fakeDaemon answers Exec: "pending" once, then runs.
-type fakeDaemon struct{ calls []daemon.ExecArgs }
+type fakeDaemon struct {
+	mu    sync.Mutex
+	calls []daemon.ExecArgs
+}
 
 func (f *fakeDaemon) Close() error { return nil }
 func (f *fakeDaemon) Call(method string, args, reply any) error {
@@ -19,7 +24,9 @@ func (f *fakeDaemon) Call(method string, args, reply any) error {
 		reply.(*daemon.HostsReply).Hosts = []daemon.HostInfo{{Name: "web1", Profile: "standard", Description: "prod"}}
 	case "A.Exec":
 		a := *args.(*daemon.ExecArgs)
+		f.mu.Lock()
 		f.calls = append(f.calls, a)
+		f.mu.Unlock()
 		r := reply.(*daemon.ExecReply)
 		switch {
 		case strings.HasPrefix(a.Cmd, "cat ~/.ssh"):
@@ -87,8 +94,9 @@ func TestMCP(t *testing.T) {
 	if s, _ := text(7); !strings.Contains(s, "exit=0") {
 		t.Errorf("approved: %q", s)
 	}
-	if last := fd.calls[len(fd.calls)-1]; last.ApprovalID != 7 || last.WaitMax != approvalPoll || last.Agent != "mcp" {
-		t.Errorf("exec args: %+v", last)
+	i := slices.IndexFunc(fd.calls, func(a daemon.ExecArgs) bool { return a.ApprovalID == 7 })
+	if i < 0 || fd.calls[i].WaitMax != approvalPoll || fd.calls[i].Agent != "mcp" {
+		t.Errorf("exec args: %+v", fd.calls)
 	}
 	if res[8]["error"].(map[string]any)["code"].(float64) != -32601 {
 		t.Errorf("unknown method: %v", res[8])

@@ -149,6 +149,12 @@ func (s *Service) Exec(a *ExecArgs, r *ExecReply) error {
 	e := audit.Entry{Kind: a.Kind, Agent: a.Agent, Cwd: a.Cwd, Repo: repoDir, Host: a.Host, Cmd: display, Level: r.Level}
 
 	act := policy.Decide(res.Level, profile)
+	if act == policy.Ask && a.Agent != AgentClaude {
+		// Only Claude Code's hook can ask the user in chat. Every other
+		// caller (Codex, Gemini, Antigravity, MCP, unknown) gets the
+		// out-of-band approval instead of running unasked.
+		act = policy.Approve
+	}
 	id := 0
 	switch act {
 	case policy.Block:

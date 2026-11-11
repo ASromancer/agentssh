@@ -32,7 +32,7 @@ For the human user (need a real terminal; most need a code from a desktop notifi
   agentssh host add|edit|ls|rm|trust ...
   agentssh key gen|import|export|ls|rm ...
   agentssh log [--follow] [-n N]
-  agentssh install-hooks claude|codex
+  agentssh install-hooks claude|codex|gemini|antigravity|all
 
 Exit codes: the remote command's own code, or
   100 blocked by policy, 101 denied / approval timed out, 102 daemon not running or vault locked.
@@ -102,11 +102,16 @@ func env() daemon.Env {
 	cwd, _ := os.Getwd()
 	e := daemon.Env{Cwd: cwd}
 	if os.Getenv("CLAUDECODE") != "" {
-		e.Agent = "claude-code"
+		e.Agent = daemon.AgentClaude
 	}
 	for _, kv := range os.Environ() {
-		if strings.HasPrefix(kv, "CODEX_") {
+		switch {
+		case strings.HasPrefix(kv, "CODEX_"):
 			e.Agent = "codex"
+		case strings.HasPrefix(kv, "GEMINI_CLI="):
+			e.Agent = "gemini"
+		case strings.HasPrefix(kv, "ANTIGRAVITY"):
+			e.Agent = "antigravity"
 		}
 	}
 	return e

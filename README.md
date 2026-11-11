@@ -13,9 +13,12 @@ One static Go binary for Linux, macOS and Windows (amd64, arm64). Apache-2.0.
 
 ## Install
 
+Download a binary from [Releases](https://github.com/ASromancer/agentssh/releases) and put it on your `PATH`, or:
+
 ```sh
-go install github.com/ASromancer/agentssh@latest   # or download a release binary
-agentssh init        # vault + master key in the OS keyring (or --passphrase), imports ~/.ssh/config, service, Claude hook
+go install github.com/ASromancer/agentssh@latest
+agentssh init        # vault + master key in the OS keyring (or --passphrase), imports ~/.ssh/config,
+                     # user service, and the skill + hook for each agent it finds
 ```
 
 `init` imports hosts from `~/.ssh/config`, but agents can't see any of them until you enable each one.
@@ -58,7 +61,41 @@ An agentssh run passes the remote command's exit code through unchanged. agentss
 
 If agentssh itself produced the exit code, it also prints a stderr line starting with `agentssh:`. If the remote command happens to exit with 100–102, no such line appears.
 
-`init` / `install-hooks claude` installs a skill at `~/.claude/skills/agentssh/SKILL.md` and a `PreToolUse` hook. `install-hooks codex` adds instructions to `~/.codex/AGENTS.md`.
+## Agents
+
+| Agent | Install | What you get |
+|---|---|---|
+| Claude Code | `/plugin marketplace add ASromancer/agentssh` then `/plugin install agentssh@agentssh`, or `agentssh install-hooks claude` | skill, `PreToolUse` hook (`install-hooks` also adds `Bash(ssh:*)`-style deny rules) |
+| Codex | `agentssh install-hooks codex`, then run `/hooks` in Codex once to trust the hook | skill in `~/.agents/skills`, `AGENTS.md` block, `hooks.json`, `rules/agentssh.rules` (forbids `ssh`, `scp`, … and human-only `agentssh` commands) |
+| Antigravity (app, IDE, `agy`) | `agentssh install-hooks antigravity` | skill in `~/.gemini/config/skills`, `hooks.json` group, `agy` deny rules. In the app and IDE, also add `ssh`/`scp` to the deny list in Settings. |
+| Gemini CLI (legacy) | `agentssh install-hooks gemini` | skill in `~/.agents/skills`, `BeforeTool` hook, `policies/agentssh.toml` |
+| Any MCP client | see below | the same tools over MCP |
+
+`agentssh install-hooks all` installs for every agent it detects. All of them install the binary's absolute path as the hook command, so the binary has to stay where it is.
+
+Only Claude Code's hook can ask you in chat before a `mutate` command on a `standard` host. Codex and Gemini hooks have no "ask", and MCP has no hooks at all. For those agents (and any caller that isn't Claude Code), the daemon sends `mutate` commands on `standard` hosts through the same out-of-band approval as `destructive` ones. To skip that, use the `full` profile or `allow` patterns.
+
+### MCP
+
+`agentssh mcp` is a stdio MCP server with the tools `hosts`, `run`, `output`, `explain`, `get`, `put`, `job_start`, `job_tail` and `job_kill`. It uses the same daemon, policy and approvals as the CLI.
+
+When a command needs approval, `run` doesn't block past the client's tool timeout. It returns an `approval_id`, and the agent calls `run` again with that id after you approve.
+
+Pass `--cwd <repo>` so the server finds that repo's `.agentssh.toml`.
+
+```jsonc
+// Claude Desktop, Cursor, Windsurf, Gemini CLI (~/.gemini/settings.json), Antigravity (~/.gemini/config/mcp_config.json)
+{ "mcpServers": { "agentssh": { "command": "agentssh", "args": ["mcp"] } } }
+```
+
+```toml
+# Codex (~/.codex/config.toml), or: codex mcp add agentssh -- agentssh mcp
+[mcp_servers.agentssh]
+command = "agentssh"
+args = ["mcp"]
+```
+
+Agents that have a shell work better with the CLI and skill: no tool schemas sit in every prompt, and the hooks apply.
 
 ## Profiles and rules
 
@@ -119,7 +156,8 @@ Three wrong codes deny the request.
   It does **not** protect against a malicious process running as your user that attacks deliberately. Such a process can read the OS keyring, debug the daemon, or read your screen.
 - **Hardened mode (planned for V1.1):** the daemon runs as a separate system user, so agents cannot read the vault, the config or the daemon's memory. This is a real security boundary.
 - **If desktop notifications don't work**, the approval code is shown in the terminal instead. An agent that can fake a TTY could then approve its own requests. `agentssh doctor` warns about this.
-- **The agent hook is a soft layer.** It asks you about `mutate` commands, denies direct `ssh`/`scp`/`rsync`, and denies human-only `agentssh` subcommands. The daemon enforces forbidden commands, profiles and approvals whether or not the hook is installed.
+- **Agent hooks are a soft layer.** They deny direct `ssh`/`scp`/`rsync`, deny human-only `agentssh` subcommands, and keep agents out of agentssh's own files. In Claude Code they also ask you before `mutate` commands. The daemon enforces forbidden commands, profiles and approvals whether or not a hook is installed.
+- **The agent name is self-reported.** The CLI derives it from environment variables such as `CLAUDECODE`, `CODEX_*` and `GEMINI_CLI`, so a caller can claim to be Claude Code. That only affects whether a `mutate` command on a `standard` host gets an in-chat ask or an out-of-band approval. It never bypasses forbidden commands or destructive approvals.
 - **Classification is best-effort static analysis.** It handles quoting, escapes, wrappers, nested shells, globs on sensitive paths and dynamic command names; dynamic or unknown constructs are classified upward. Interpreters such as `python -c` count as plain `mutate`.
 
 ## Windows

@@ -20,7 +20,8 @@ os.makedirs(HOME)
 ENV = {k: v for k, v in os.environ.items() if k not in ("DISPLAY", "WAYLAND_DISPLAY", "CLAUDECODE")}
 ENV.update(HOME=HOME, XDG_CONFIG_HOME=f"{HOME}/.config", XDG_STATE_HOME=f"{HOME}/.local/state",
            XDG_RUNTIME_DIR=f"{TMP}/run", AGENTSSH_SOCKET=f"{TMP}/s.sock",
-           DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent", TERM="dumb")
+           DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent", TERM="dumb",
+           CLAUDECODE="1")  # agent calls come from Claude Code unless a test says otherwise
 os.makedirs(ENV["XDG_RUNTIME_DIR"], mode=0o700)
 NOTES = os.path.join(TMP, "notifications.log")
 os.makedirs(f"{TMP}/bin")
@@ -167,6 +168,8 @@ def main():
         # ~/.ssh/config to import (hidden from agents by default)
         os.makedirs(f"{HOME}/.ssh")
         open(f"{HOME}/.ssh/config", "w").write("Host imported\n  HostName 10.9.9.9\n  User bob\n")
+        os.makedirs(f"{HOME}/.claude")
+        os.makedirs(f"{HOME}/.codex")
 
         rc, _, err = run("approve")
         check(rc == 2 and "real terminal" in err, "approve refuses to run without a terminal")
@@ -178,13 +181,17 @@ def main():
         t.send(PASS)
         t.expect(r"user service\? \[Y/n\] ")
         t.send("n")
-        t.expect(r"skill and hook\? \[Y/n\] ")
+        t.expect(r"skill and hook for claude\? \[Y/n\] ")
+        t.send("y")
+        t.expect(r"skill and hook for codex\? \[Y/n\] ")
         t.send("y")
         check(t.wait() == 0, "init (passphrase mode, imports ~/.ssh/config)", t.buf)
         settings = json.load(open(f"{HOME}/.claude/settings.json"))
         check("hook claude" in json.dumps(settings) and "Bash(ssh:*)" in settings["permissions"]["deny"],
               "init installs the Claude hook and ssh deny rules")
         check(os.path.exists(f"{HOME}/.claude/skills/agentssh/SKILL.md"), "init installs the skill")
+        check("hook codex" in open(f"{HOME}/.codex/hooks.json").read() and os.path.exists(f"{HOME}/.codex/rules/agentssh.rules"),
+              "init installs the Codex hook and rules")
 
         rc, _, err = run("hosts")
         check(rc == 102 and err.startswith("agentssh:"), "agent gets 102 while the daemon is down")
@@ -228,6 +235,22 @@ def main():
 
         rc, out, err = run("run", "e2e", "sh -c 'exit 7'")
         check(rc == 7 and not err, "remote exit code passes through", out + err)
+
+        codex_env = {k: v for k, v in ENV.items() if k != "CLAUDECODE"}
+        codex_env["CODEX_SANDBOX"] = "seatbelt"
+        p = subprocess.Popen([BIN, "run", "e2e", "touch /tmp/x-agentssh-e2e"], env=codex_env, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        line = p.stderr.readline()
+        p.kill()
+        check("waiting approval #" in line, "mutate from Codex needs out-of-band approval (no soft ask)", line)
+        t = Tty("approve")
+        t.expect(r"agent=codex")
+        t.expect(r"approval code \(from the desktop notification\): ")
+        t.send(last_code())
+        t.expect(r"\[y\] once")
+        t.send("n")
+        t.expect("denied")
+        check(t.wait() == 0, "approve: plain deny")
 
         rc, _, err = run("run", "e2e", "cat ~/.ssh/id_rsa")
         check(rc == 100 and "forbidden" in err, "forbidden command blocked with 100", err)
@@ -320,6 +343,12 @@ def main():
         check(hook('agentssh run e2e "systemctl restart nginx"') == "ask", "hook asks for mutate on standard")
         check(hook('agentssh run e2e "cat /etc/shadow"') == "deny", "hook denies forbidden")
         check(hook("agentssh approve") == "deny", "hook denies human-only commands")
+        p = subprocess.run([BIN, "hook", "gemini"], env=ENV, capture_output=True, text=True, input=json.dumps(
+            {"hook_event_name": "BeforeTool", "tool_name": "run_shell_command", "cwd": TMP, "tool_input": {"command": "scp a e2e:/tmp"}}))
+        check(json.loads(p.stdout)["decision"] == "deny", "gemini hook denies scp")
+        p = subprocess.run([BIN, "hook", "antigravity"], env=ENV, capture_output=True, text=True, input=json.dumps(
+            {"toolCall": {"name": "run_command", "args": {"CommandLine": 'agentssh run e2e "uptime"', "Cwd": TMP}}}))
+        check(json.loads(p.stdout)["decision"] == "allow", "antigravity hook allows a read via the daemon")
 
         # MCP server over stdio, same daemon and policy.
         mcp = subprocess.Popen([BIN, "mcp", "--cwd", TMP], env=ENV, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)

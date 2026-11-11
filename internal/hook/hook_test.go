@@ -36,7 +36,7 @@ func run(t *testing.T, tool string, input map[string]any) string {
 	if out.Len() == 0 {
 		return ""
 	}
-	var o output
+	var o claudeOut
 	if err := json.Unmarshal(out.Bytes(), &o); err != nil {
 		t.Fatal(err)
 	}
@@ -93,5 +93,80 @@ func TestEditWrite(t *testing.T) {
 	}
 	if got := run(t, "Edit", map[string]any{"file_path": filepath.Join(home, "work", "main.go")}); got != "" {
 		t.Errorf("normal edit: %q", got)
+	}
+}
+
+func runAgent(t *testing.T, agent string, event map[string]any) map[string]any {
+	t.Helper()
+	in, _ := json.Marshal(event)
+	var out bytes.Buffer
+	if err := Run(agent, bytes.NewReader(in), &out, []string{filepath.Join(home, ".config", "agentssh")}, fakeExplain); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() == 0 {
+		return nil
+	}
+	var o map[string]any
+	if err := json.Unmarshal(out.Bytes(), &o); err != nil {
+		t.Fatal(err)
+	}
+	return o
+}
+
+func TestCodex(t *testing.T) {
+	ev := func(cmd string) map[string]any {
+		return map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": home, "tool_input": map[string]any{"command": cmd}}
+	}
+	if o := runAgent(t, "codex", ev("ssh web1 uptime")); o == nil || o["hookSpecificOutput"].(map[string]any)["permissionDecision"] != "deny" {
+		t.Errorf("codex ssh: %v", o)
+	}
+	// ask and allow are not reliable in Codex: no output, the daemon enforces.
+	for _, c := range []string{`agentssh run web1 "systemctl restart nginx"`, `agentssh run web1 "ls"`} {
+		if o := runAgent(t, "codex", ev(c)); o != nil {
+			t.Errorf("codex %s: %v", c, o)
+		}
+	}
+	patch := map[string]any{"tool_name": "apply_patch", "cwd": home, "tool_input": map[string]any{
+		"input": "*** Begin Patch\n*** Update File: " + filepath.Join(home, ".config", "agentssh", "hosts.toml") + "\n"}}
+	if o := runAgent(t, "codex", patch); o == nil {
+		t.Error("codex apply_patch on agentssh config was not denied")
+	}
+}
+
+func TestGemini(t *testing.T) {
+	ev := func(cmd string) map[string]any {
+		return map[string]any{"hook_event_name": "BeforeTool", "tool_name": "run_shell_command", "cwd": home,
+			"tool_input": map[string]any{"command": cmd, "description": "x"}}
+	}
+	for cmd, want := range map[string]any{
+		"scp a web1:/tmp":                             "deny",
+		`agentssh run web1 "df -h"`:                   "allow",
+		`agentssh run web1 "systemctl restart nginx"`: nil,
+		"ls": nil,
+	} {
+		o := runAgent(t, "gemini", ev(cmd))
+		if (o == nil) != (want == nil) || (o != nil && o["decision"] != want) {
+			t.Errorf("gemini %s: %v", cmd, o)
+		}
+	}
+	w := map[string]any{"tool_name": "write_file", "cwd": home, "tool_input": map[string]any{"file_path": filepath.Join(home, ".config", "agentssh", "rules.toml")}}
+	if o := runAgent(t, "gemini", w); o == nil || o["decision"] != "deny" {
+		t.Errorf("gemini write_file: %v", o)
+	}
+}
+
+func TestAntigravity(t *testing.T) {
+	ev := func(cmd string) map[string]any {
+		return map[string]any{"toolCall": map[string]any{"name": "run_command", "args": map[string]any{"CommandLine": cmd, "Cwd": home}},
+			"workspacePaths": []any{home}, "conversationId": "c"}
+	}
+	if o := runAgent(t, "antigravity", ev("ssh -p 22 root@web1")); o == nil || o["decision"] != "deny" {
+		t.Errorf("antigravity ssh: %v", o)
+	}
+	if o := runAgent(t, "antigravity", ev(`agentssh run web1 "uptime"`)); o == nil || o["decision"] != "allow" {
+		t.Errorf("antigravity agentssh: %v", o)
+	}
+	if o := runAgent(t, "antigravity", ev("agentssh key export web1")); o == nil || o["decision"] != "deny" {
+		t.Errorf("antigravity admin: %v", o)
 	}
 }

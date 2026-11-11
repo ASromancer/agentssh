@@ -1,9 +1,14 @@
-// Package hook implements the soft protection layer: a Claude Code
-// PreToolUse hook that turns tool calls into allow/ask/deny decisions.
+// Package hook implements the soft protection layer: pre-tool hooks for
+// Claude Code, Codex, Gemini CLI and Antigravity that turn tool calls into
+// allow/ask/deny decisions. Policy, approvals and forbidden commands are
+// enforced by the daemon regardless; this layer catches direct ssh, keeps
+// agents away from agentssh's own files and admin commands, and lets Claude
+// Code ask before state-changing commands.
 package hook
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -17,13 +22,58 @@ import (
 // ("run", "ask", "approve" or "block").
 type Explainer func(host, cmd, cwd string) (action string, err error)
 
-type event struct {
-	ToolName  string         `json:"tool_name"`
-	ToolInput map[string]any `json:"tool_input"`
-	Cwd       string         `json:"cwd"`
+// Agents with a hook format.
+var Agents = []string{"claude", "codex", "gemini", "antigravity"}
+
+// Run reads one pre-tool event in agent's format from in and writes the
+// decision to out. No output means "no opinion": the agent's normal
+// permission flow applies.
+func Run(agent string, in io.Reader, out io.Writer, protected []string, explain Explainer) error {
+	var raw map[string]any
+	if err := json.NewDecoder(in).Decode(&raw); err != nil {
+		return err
+	}
+	tool, _ := raw["tool_name"].(string)
+	input, _ := raw["tool_input"].(map[string]any)
+	cwd, _ := raw["cwd"].(string)
+	if agent == "antigravity" {
+		tc, _ := raw["toolCall"].(map[string]any)
+		tool, _ = tc["name"].(string)
+		input, _ = tc["args"].(map[string]any)
+		cwd, _ = input["Cwd"].(string)
+		if ws, _ := raw["workspacePaths"].([]any); cwd == "" && len(ws) > 0 {
+			cwd, _ = ws[0].(string)
+		}
+	}
+	decision, reason := Decide(tool, input, cwd, protected, explain)
+
+	var o any
+	switch agent {
+	case "claude":
+		if decision != "" {
+			o = claudeOutput(decision, reason)
+		}
+	case "codex":
+		// Codex runs the command anyway on "ask", and plain "allow" is not a
+		// documented output: only deny. The daemon turns state-changing
+		// commands from Codex into out-of-band approvals instead.
+		if decision == "deny" {
+			o = claudeOutput(decision, reason)
+		}
+	case "gemini", "antigravity":
+		if decision == "deny" || decision == "allow" {
+			o = map[string]string{"decision": decision, "reason": reason}
+		}
+	default:
+		return errors.New("unknown agent " + agent)
+	}
+	if o == nil {
+		return nil
+	}
+	return json.NewEncoder(out).Encode(o)
 }
 
-type output struct {
+type claudeOut struct {
 	HookSpecificOutput struct {
 		HookEventName            string `json:"hookEventName"`
 		PermissionDecision       string `json:"permissionDecision"`
@@ -31,22 +81,17 @@ type output struct {
 	} `json:"hookSpecificOutput"`
 }
 
-// Claude reads one PreToolUse event and writes a decision. No output means
-// "no opinion": Claude Code's normal permission flow applies.
-func Claude(in io.Reader, out io.Writer, protected []string, explain Explainer) error {
-	var ev event
-	if err := json.NewDecoder(in).Decode(&ev); err != nil {
-		return err
-	}
-	decision, reason := Decide(ev.ToolName, ev.ToolInput, ev.Cwd, protected, explain)
-	if decision == "" {
-		return nil
-	}
-	var o output
+func claudeOutput(decision, reason string) claudeOut {
+	var o claudeOut
 	o.HookSpecificOutput.HookEventName = "PreToolUse"
 	o.HookSpecificOutput.PermissionDecision = decision
 	o.HookSpecificOutput.PermissionDecisionReason = reason
-	return json.NewEncoder(out).Encode(o)
+	return o
+}
+
+// Claude is Run for Claude Code.
+func Claude(in io.Reader, out io.Writer, protected []string, explain Explainer) error {
+	return Run("claude", in, out, protected, explain)
 }
 
 var (
@@ -55,20 +100,44 @@ var (
 	readOnlyUs = map[string]bool{"hosts": true, "out": true, "explain": true, "help": true, "version": true}
 )
 
-func Decide(tool string, input map[string]any, cwd string, protected []string, explain Explainer) (string, string) {
-	switch tool {
-	case "Edit", "Write", "MultiEdit", "NotebookEdit":
-		p, _ := input["file_path"].(string)
-		if p == "" {
-			p, _ = input["notebook_path"].(string)
+// Shell tools of each agent: Claude/Codex Bash, Codex shell/exec_command,
+// Gemini run_shell_command, Antigravity run_command.
+var shellTools = map[string]bool{"Bash": true, "shell": true, "exec_command": true, "run_shell_command": true, "run_command": true}
+
+// shellCommand extracts the command line from a shell tool's input.
+func shellCommand(input map[string]any) string {
+	for _, k := range []string{"command", "CommandLine", "cmd"} {
+		switch v := input[k].(type) {
+		case string:
+			return v
+		case []any: // ["bash", "-lc", "<script>"]
+			parts := make([]string, 0, len(v))
+			for _, p := range v {
+				s, _ := p.(string)
+				parts = append(parts, s)
+			}
+			if len(parts) == 3 && (parts[1] == "-lc" || parts[1] == "-c") {
+				return parts[2]
+			}
+			return strings.Join(parts, " ")
 		}
-		if p != "" && inside(p, cwd, protected) {
+	}
+	return ""
+}
+
+func Decide(tool string, input map[string]any, cwd string, protected []string, explain Explainer) (string, string) {
+	if shellTools[tool] {
+		return bash(shellCommand(input), cwd, protected, explain)
+	}
+	// Any other tool (Edit, Write, apply_patch, write_file, replace, ...):
+	// refuse if it targets agentssh's own files.
+	for _, k := range []string{"file_path", "notebook_path", "path", "TargetFile", "AbsolutePath"} {
+		if p, _ := input[k].(string); p != "" && inside(p, cwd, protected) {
 			return "deny", "agentssh config and state can only be changed by the user"
 		}
-		return "", ""
-	case "Bash":
-		cmd, _ := input["command"].(string)
-		return bash(cmd, cwd, protected, explain)
+	}
+	if mentions(fmt.Sprint(input), protected) { // fmt, not JSON: no escaped backslashes
+		return "deny", "agentssh config and state can only be changed by the user"
 	}
 	return "", ""
 }

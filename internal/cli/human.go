@@ -546,16 +546,16 @@ func cmdDoctor(args []string) int {
 	}
 
 	home, _ := os.UserHomeDir()
-	settings, _ := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
-	if strings.Contains(string(settings), "hook claude") {
-		ok("Claude Code hook installed")
-	} else {
-		warn("Claude Code hook not installed: mutate commands on 'standard' hosts run without asking (agentssh install-hooks claude)")
-	}
-	if strings.Contains(string(settings), "Bash(ssh") {
-		ok("Claude Code denies direct ssh")
-	} else {
-		warn("no Claude Code deny rule for direct ssh (agentssh install-hooks claude)")
+	for _, in := range installers {
+		if !in.detect(home) {
+			continue
+		}
+		b, _ := os.ReadFile(hookFile(in.name, home))
+		if strings.Contains(string(b), "hook "+in.name) || (in.name == "claude" && strings.Contains(string(b), "agentssh@")) {
+			ok(in.name + ": agentssh hook installed")
+		} else {
+			warn(in.name + ": agentssh hook not installed; direct ssh is not blocked (agentssh install-hooks " + in.name + ")")
+		}
 	}
 
 	if err := approval.Desktop("agentssh doctor", "test notification"); err != nil {
@@ -649,15 +649,17 @@ func cmdInit(args []string) int {
 			t.printf("service: %v\n", err)
 		}
 	}
-	if t.yes("install the Claude Code skill and hook?", true) {
-		if err := installClaude(); err != nil {
-			t.printf("claude: %v\n", err)
-		}
-	}
 	home, _ := os.UserHomeDir()
-	if _, err := os.Stat(filepath.Join(home, ".codex")); err == nil && t.yes("add agentssh instructions to ~/.codex/AGENTS.md?", true) {
-		if err := installCodex(); err != nil {
-			t.printf("codex: %v\n", err)
+	for _, in := range installers {
+		if !in.detect(home) || !t.yes("install the agentssh skill and hook for "+in.name+"?", true) {
+			continue
+		}
+		cmd, err := hookCommand(in.name)
+		if err == nil {
+			err = in.install(home, cmd)
+		}
+		if err != nil {
+			t.printf("%s: %v\n", in.name, err)
 		}
 	}
 	if salt != nil {

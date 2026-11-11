@@ -18,6 +18,10 @@ const (
 	CodeNoDaemon = 102 // daemon not running or vault locked
 )
 
+// AgentClaude is the Env.Agent value for Claude Code, the only agent whose
+// hook asks the user before state-changing commands (soft layer).
+const AgentClaude = "claude-code"
+
 // Env is what the CLI tells the daemon about its caller. It is
 // self-declared, so it only scopes convenience features, never security.
 type Env struct {
