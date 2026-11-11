@@ -140,7 +140,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   - `humanok.Default Confirmer`
   - `humanok.ErrDenied`, `humanok.ErrUnavailable`
   - `type Fake struct{ Err error; Allow bool }` with `func (f *Fake) Msgs() []string`
-  - `humanok.ActionID`, `humanok.PolicyPath`, `humanok.PolicyXML`, `func InstallPolicy() error`
+  - `humanok.ActionID`, `humanok.PolicyPath`, `func PolicyXML(owner string) string`, `func InstallPolicy() error`
 
 - [ ] **Step 1: Write failing tests**
 
@@ -179,12 +179,17 @@ func TestPolicyXML(t *testing.T) {
 			Defaults struct {
 				Active string `xml:"allow_active"`
 			} `xml:"defaults"`
+			Owner struct {
+				Key   string `xml:"key,attr"`
+				Value string `xml:",chardata"`
+			} `xml:"annotate"`
 		} `xml:"action"`
 	}
-	if err := xml.Unmarshal([]byte(PolicyXML), &p); err != nil {
+	if err := xml.Unmarshal([]byte(PolicyXML("alice")), &p); err != nil {
 		t.Fatal(err)
 	}
-	if p.Action.ID != ActionID || p.Action.Defaults.Active != "auth_self" || !strings.Contains(p.Action.Message, "$(message)") {
+	if p.Action.ID != ActionID || p.Action.Defaults.Active != "auth_self" || !strings.Contains(p.Action.Message, "$(message)") ||
+		p.Action.Owner.Key != "org.freedesktop.policykit.owner" || p.Action.Owner.Value != "unix-user:alice" {
 		t.Fatalf("%+v", p.Action)
 	}
 }
@@ -260,6 +265,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 )
 
@@ -312,9 +318,12 @@ const (
 	PolicyPath = "/usr/share/polkit-1/actions/dev.agentssh.policy"
 )
 
-// PolicyXML is installed by 'sudo agentssh install-polkit'. auth_self (not
-// auth_self_keep): every action needs its own authentication.
-const PolicyXML = `<?xml version="1.0" encoding="UTF-8"?>
+// PolicyXML is the polkit action installed by 'sudo agentssh install-polkit'.
+// auth_self (not auth_self_keep): every action needs its own
+// authentication. polkit only lets uid 0 or an action owner pass details
+// (the $(message) text), so the installing user is the owner.
+func PolicyXML(owner string) string {
+	return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
 <policyconfig>
@@ -328,11 +337,14 @@ const PolicyXML = `<?xml version="1.0" encoding="UTF-8"?>
       <allow_inactive>auth_self</allow_inactive>
       <allow_active>auth_self</allow_active>
     </defaults>
+    <annotate key="org.freedesktop.policykit.owner">unix-user:` + owner + `</annotate>
   </action>
 </policyconfig>
 `
+}
 
-// InstallPolicy writes the polkit action. Linux only; needs root.
+// InstallPolicy writes the polkit action owned by the user who ran sudo.
+// Linux only; needs root.
 func InstallPolicy() error {
 	if runtime.GOOS != "linux" {
 		return fmt.Errorf("polkit is only used on Linux; nothing to install on %s", runtime.GOOS)
@@ -340,11 +352,15 @@ func InstallPolicy() error {
 	if os.Geteuid() != 0 {
 		return errors.New("run it with sudo: sudo agentssh install-polkit")
 	}
-	return os.WriteFile(PolicyPath, []byte(PolicyXML), 0o644)
+	owner := os.Getenv("SUDO_USER")
+	if owner == "" || owner == "root" || strings.ContainsAny(owner, "<>&\"'") {
+		return errors.New("run it with sudo from your own account (SUDO_USER must name you)")
+	}
+	return os.WriteFile(PolicyPath, []byte(PolicyXML(owner)), 0o644)
 }
 ```
 
-(If Task 1 found that `$(message)` does not expand, replace the `<message>` line with `<message>agentssh needs your confirmation (details in the agentssh window or terminal)</message>`, and make `TestPolicyXML` check that text instead of `$(message)`.)
+(Spike result, spec §4.6: `$(message)` expands only with the owner annotation; the code above includes it.)
 
 - [ ] **Step 4: Implement `linux.go`**
 
@@ -419,7 +435,7 @@ func pkResult(code int, out string, err error) error {
 }
 ```
 
-Adjust the exit-code mapping if Task 1 observed different codes, and update `TestPkResult` to match.
+Spike result (spec §4.6): 0 = authenticated, 3 = Cancel, 2 = non-interactive; the mapping above matches.
 
 - [ ] **Step 5: Add temporary stubs so other OSes still compile**
 
@@ -1499,29 +1515,15 @@ and, in `main()`, right before `os.kill(daemon_pid, signal.SIGTERM)` (the "daemo
             ENV.pop("AGENTSSH_E2E_HUMANOK")
 ```
 
-- [ ] **Step 6: Linux service mode (only if Task 1 said so)**
+- [ ] **Step 6: Linux service: import the display environment**
 
-If Task 1 found that polkit dialogs only appear for processes inside the graphical session (variant A only), then in `internal/cli/os_unix.go` replace the `case "linux":` body of `installService` with an XDG autostart entry:
-
-```go
-	case "linux":
-		p := filepath.Join(home, ".config", "autostart", "agentssh.desktop")
-		entry := fmt.Sprintf("[Desktop Entry]\nType=Application\nName=agentssh\nExec=\"%s\" daemon --detach\nNoDisplay=true\nX-GNOME-Autostart-enabled=true\n", exe)
-		if err := writeFile(p, entry); err != nil {
-			return err
-		}
-		if err := startDetached(filepath.Join(paths.State(), "daemon.log")); err != nil {
-			return err
-		}
-```
-
-(add the `paths` import). If Task 1 found variant C works but B does not, instead add after the `enable --now` call:
+Spike result (spec §4.6): polkit dialogs work from the systemd user service, so the service stays. For `Available()` to see the graphical session, in `internal/cli/os_unix.go` `installService`, `case "linux":`, add after the `enable --now` call:
 
 ```go
+		// Let the daemon see the graphical session (humanok checks DISPLAY/WAYLAND_DISPLAY).
 		_ = exec.Command("systemctl", "--user", "import-environment", "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY").Run()
+		_ = exec.Command("systemctl", "--user", "restart", "agentssh.service").Run()
 ```
-
-If variant B worked, skip this step.
 
 - [ ] **Step 7: CI runs the fake e2e**
 
