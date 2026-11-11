@@ -246,7 +246,8 @@ func (q *Queue) Resolve(id int, choice, msg, auth string) (Decision, error) {
 	}
 	q.mu.Lock()
 	e, ok := q.pending[id]
-	decided := ok && e.decided
+	// past Expires counts as decided even if the timeout timer has not fired yet
+	decided := ok && (e.decided || time.Now().After(e.req.Expires))
 	q.mu.Unlock()
 	if !ok || decided {
 		return Decision{}, fmt.Errorf("no pending request #%d", id)
