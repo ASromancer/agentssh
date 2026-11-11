@@ -11,7 +11,7 @@ const el = (tag, cls, text) => {
   return e;
 };
 const PAGE = 50;
-const VIEWS = { approvals: "Duyệt", hosts: "Host", keychain: "Kho khóa", knownhosts: "Known hosts", log: "Nhật ký" };
+const VIEWS = { setup: "Bắt đầu", approvals: "Duyệt", hosts: "Host", keychain: "Kho khóa", knownhosts: "Known hosts", log: "Nhật ký" };
 let status = null;
 let auditOffset = 0;
 let view = "approvals";
@@ -305,6 +305,7 @@ function showView(name) {
   $("title").textContent = VIEWS[name];
   if (location.hash !== "#" + name && !location.hash.startsWith("#req=")) history.replaceState(null, "", "#" + name);
   const run = (p) => p.catch(fail);
+  if (name === "setup") run(loadSetup());
   if (name === "hosts") run(loadHosts());
   if (name === "keychain") run(loadKeychain());
   if (name === "knownhosts") run(loadKnownHosts());
@@ -760,6 +761,7 @@ async function openHostDrawer(name, h) {
   let locked = false;
   const keys = await call("GET", "/api/keys").catch(() => { locked = !!(status && status.Locked); return []; });
   const layer = openLayer("drawer", name ? "Sửa host " + name : "Thêm host");
+  layer.onClose = () => { if (view === "setup") loadSetup().catch(fail); refresh(); };
   const form = el("form");
   form.noValidate = true;
   form.id = "hostform";
@@ -943,7 +945,7 @@ function keyItem(k, isPw) {
     const msg = users.length ? "Đang được dùng bởi: " + users.join(", ") + ". Các host này sẽ không đăng nhập được nữa." : "Hành động này không hoàn tác được.";
     if (!(await confirmBox("Xóa " + (isPw ? "mật khẩu " : "key ") + k.name + "?", msg, { ok: "Xóa", danger: true }))) return;
     const o = await admin("key-rm", k.name);
-    if (o) { ok(o); loadKeychain().catch(fail); }
+    if (o) { ok(o); loadKeychain().catch(fail); afterKeyAction(); }
   }));
   c.appendChild(del);
   return c;
@@ -963,17 +965,22 @@ async function showPublicKey(name, pub) {
   l.foot.append(cp, done);
   done.focus();
 }
-$("keygen").addEventListener("click", async () => {
+const afterKeyAction = () => { if (view === "setup") loadSetup().catch(fail); refresh(); };
+$("keygen").addEventListener("click", genKey);
+$("keyimport").addEventListener("click", importKey);
+$("pwimport").addEventListener("click", savePassword);
+async function genKey() {
   try {
     const v = await askForm({ title: "Tạo key ed25519", desc: "Key mới được sinh và lưu trong vault; private key không rời khỏi daemon.", ok: "Tạo key", fields: [{ name: "name", label: "Tên key", placeholder: "vd: web1-agent", required: true }] });
     if (!v) return;
     const pub = await admin("key-gen", v.name.trim());
     if (!pub) return;
     loadKeychain().catch(fail);
+    afterKeyAction();
     showPublicKey(v.name.trim(), pub);
   } catch (e) { fail(e); }
-});
-$("keyimport").addEventListener("click", async () => {
+}
+async function importKey() {
   try {
     const v = await askForm({
       title: "Import key", desc: "Chọn file private key (OpenSSH hoặc PEM). Key được chuẩn hóa rồi lưu vào vault.", ok: "Import",
@@ -985,10 +992,10 @@ $("keyimport").addEventListener("click", async () => {
     });
     if (!v) return;
     const o = await admin("key-import", v.name.trim(), { key: await v.file.text(), keyPassphrase: v.pass });
-    if (o) { ok(o); loadKeychain().catch(fail); }
+    if (o) { ok(o); loadKeychain().catch(fail); afterKeyAction(); }
   } catch (e) { fail(e); }
-});
-$("pwimport").addEventListener("click", async () => {
+}
+async function savePassword() {
   try {
     const v = await askForm({
       title: "Lưu mật khẩu", desc: "Dùng khi server chỉ cho đăng nhập bằng mật khẩu. Nên ưu tiên key.", ok: "Lưu",
@@ -996,9 +1003,9 @@ $("pwimport").addEventListener("click", async () => {
     });
     if (!v) return;
     const o = await admin("key-import", v.name.trim(), { password: v.pw });
-    if (o) { ok(o); loadKeychain().catch(fail); }
+    if (o) { ok(o); loadKeychain().catch(fail); afterKeyAction(); }
   } catch (e) { fail(e); }
-});
+}
 
 // ---- known hosts ----
 let khData = [];
@@ -1148,6 +1155,8 @@ $("next").addEventListener("click", () => { auditOffset += PAGE; loadAudit().cat
 // ---- live updates ----
 async function refresh() {
   try { await loadStatus(); await loadPending(); } catch (e) { fail(e); }
+  await setupGate();
+  if (view === "setup" && !document.activeElement.matches("input")) loadSetup().catch(fail);
   if (view === "hosts") loadHosts().catch(fail);
   if (view === "keychain" && !document.activeElement.matches("input")) loadKeychain().catch(fail);
 }
@@ -1161,6 +1170,176 @@ let esOpened = false;
 es.onopen = () => { conn(true); if (esOpened) refresh(); esOpened = true; }; // resync what a drop missed
 es.addEventListener("update", () => { sseErrors = 0; conn(true); refresh(); });
 es.onerror = () => { conn(false); if (++sseErrors === 3) toast("Mất kết nối tới daemon ostiary", "error"); };
+// ---- setup ("Bắt đầu") ----
+const AGENT_NAMES = { claude: "Claude Code", codex: "Codex", gemini: "Gemini CLI", antigravity: "Antigravity" };
+let setupGated = false;
+const initialHash = location.hash;
+function setupSteps(r) {
+  return [r.VaultReady, r.Hosts > 0, r.Keys > 0, (r.Agents || []).some((a) => a.Installed), r.Autostart];
+}
+function updateChip(r) {
+  const n = setupSteps(r).filter(Boolean).length;
+  const c = $("setupchip");
+  c.classList.toggle("hidden", n === 5 || r.Skipped);
+  c.textContent = "Thiết lập " + n + "/5";
+}
+// First refresh after load: show the checklist when onboarding is unfinished
+// (a #req=N or other deep link always wins).
+async function setupGate() {
+  const first = !setupGated;
+  setupGated = true;
+  let r;
+  try { r = await call("GET", "/api/setup"); } catch (e) { return; }
+  updateChip(r);
+  if (first && !initialHash && (!r.VaultReady || (!r.Skipped && setupSteps(r).some((d) => !d)))) location.hash = "#setup";
+}
+async function setupAct(b, fn) { // run an action button, then re-render
+  await busy(b, async () => { await fn(); });
+  await loadSetup().catch(fail);
+  refresh();
+}
+function stepCard(n, o) {
+  const c = el("li", "step" + (o.done ? " done" : "") + (o.current ? " current" : "") + (o.optional ? " optional" : ""));
+  const ic = el("span", "stepic");
+  if (o.done) ic.appendChild(icon("check")); else ic.textContent = String(n);
+  const body = el("div", "stepbody");
+  const head = el("div", "stephead");
+  head.appendChild(el("h2", null, o.title));
+  if (o.done) head.appendChild(el("span", "pill ok", "Xong"));
+  else if (o.optional) head.appendChild(el("span", "pill", "Tùy chọn"));
+  body.append(head, el("p", "muted", o.desc));
+  if (o.hint) body.appendChild(el("p", "hint", o.hint));
+  if (o.controls && o.controls.length) { const a = el("div", "stepact"); a.append(...o.controls); body.appendChild(a); }
+  if (o.extra) body.appendChild(o.extra);
+  c.append(ic, body);
+  return c;
+}
+async function passphraseInit() {
+  const v = await askForm({
+    title: "Dùng passphrase", desc: "Vault được mã hóa bằng passphrase này; bạn nhập lại mỗi lần mở khóa. Ostiary không thể khôi phục nếu bạn quên.", ok: "Tạo vault",
+    fields: [{ name: "p1", label: "Passphrase", type: "password", required: true, autocomplete: "new-password" }, { name: "p2", label: "Nhập lại", type: "password", required: true, autocomplete: "new-password" }],
+  });
+  if (!v) return;
+  if (v.p1.length < 8) throw new Error("Passphrase cần ít nhất 8 ký tự");
+  if (v.p1 !== v.p2) throw new Error("Hai passphrase không khớp");
+  return admin("init", "passphrase", { pass: v.p1 });
+}
+async function loadSetup() {
+  await loadStatus();
+  const r = await call("GET", "/api/setup");
+  updateChip(r);
+  const box = $("setupbox");
+  const ready = r.VaultReady, locked = r.Locked;
+  const done = setupSteps(r);
+  const n = done.filter(Boolean).length;
+  const cur = done.indexOf(false);
+  const out = [];
+
+  const head = el("div", "setuphead");
+  const bar = el("div", "progress");
+  bar.setAttribute("role", "img");
+  bar.setAttribute("aria-label", "Đã xong " + n + " trên 5 bước");
+  done.forEach((d) => bar.appendChild(el("span", d ? "on" : "")));
+  const ht = el("div", "txt");
+  ht.append(el("h2", null, n === 5 ? "Mọi thứ đã sẵn sàng" : "Thiết lập Ostiary"), el("p", "muted", n === 5 ? "Cả 5 bước đã xong." : "Làm lần lượt từng bước để agent dùng được SSH an toàn."));
+  head.append(ht, el("span", "count5", n + "/5"), bar);
+
+  // 1 vault
+  const c1 = [];
+  if (!ready) {
+    const b = button("Tạo vault", "primary lg");
+    b.addEventListener("click", () => setupAct(b, async () => { const o = await admin("init", "keyring"); if (o) ok(o); }));
+    const l = button("Dùng passphrase thay vì keyring", "ghost");
+    l.addEventListener("click", () => setupAct(l, async () => { const o = await passphraseInit(); if (o) ok(o); }));
+    c1.push(b, l);
+  } else if (locked) {
+    const b = button("Mở khóa", "primary lg", "unlock");
+    b.addEventListener("click", () => setupAct(b, toggleVault));
+    c1.push(b);
+  }
+  out.push(stepCard(1, { title: "Tạo vault", desc: ready ? (locked ? "Vault đã có nhưng đang khóa. Mở khóa để tiếp tục." : "Vault lưu private key và mật khẩu, mã hóa trên máy này.") : "Vault là nơi lưu private key và mật khẩu SSH, mã hóa trên máy này.", done: ready, controls: c1 }));
+
+  // 2 host
+  const c2 = [];
+  if (r.Hosts <= 0) { const b = button("Thêm host", "primary lg", "plus"); b.addEventListener("click", () => busy(b, () => openHostDrawer("", null))); c2.push(b); }
+  out.push(stepCard(2, { title: "Thêm host", desc: "Máy chủ mà agent sẽ SSH tới.", done: r.Hosts > 0, controls: c2, hint: r.Hosts > 0 ? "Nhớ bấm Trust host key cho host mới ở màn Host." : "" }));
+
+  // 3 key
+  const off = locked || !ready;
+  const c3 = [["Tạo key", genKey, "plus"], ["Import key", importKey, "upload"], ["Lưu mật khẩu", savePassword, "lock"]].map(([t, f, i]) => {
+    const b = button(t, r.Keys > 0 ? "" : "primary", i);
+    b.disabled = off;
+    b.addEventListener("click", () => setupAct(b, f));
+    return b;
+  });
+  out.push(stepCard(3, { title: "Thêm key hoặc mật khẩu", desc: "Thông tin đăng nhập để Ostiary dùng thay agent; agent không bao giờ thấy chúng.", done: r.Keys > 0, controls: r.Keys > 0 ? [] : c3, hint: off && r.Keys <= 0 ? "Cần tạo và mở khóa vault ở bước 1 trước." : "" }));
+
+  // 4 agents
+  const rows = el("div", "agentrows");
+  (r.Agents || []).forEach((a) => {
+    const row = el("div", "agentrow");
+    row.appendChild(el("b", null, AGENT_NAMES[a.Name] || a.Name));
+    row.appendChild(el("span", "pill " + (a.Installed ? "ok" : ""), a.Installed ? "Đã cài" : a.Detected ? "Chưa cài" : "Không thấy trên máy"));
+    if (a.Detected && !a.Installed) {
+      const b = button("Cài", "primary");
+      b.addEventListener("click", () => setupAct(b, async () => { const o = await admin("hooks", a.Name); if (o) ok(o); }));
+      row.appendChild(b);
+    }
+    rows.appendChild(row);
+  });
+  out.push(stepCard(4, { title: "Kết nối AI agent", desc: "Cài hook để lệnh SSH của agent đi qua Ostiary.", done: done[3], extra: (r.Agents || []).length ? rows : null }));
+
+  // 5 autostart
+  const sw = el("label", "switch");
+  const cb = el("input");
+  cb.type = "checkbox"; cb.checked = !!r.Autostart;
+  cb.setAttribute("role", "switch");
+  cb.addEventListener("change", async () => {
+    const want = cb.checked;
+    cb.disabled = true;
+    try {
+      const o = await admin("autostart", want ? "on" : "off");
+      if (o === null) cb.checked = !want; else if (o) ok(o);
+    } catch (e) { cb.checked = !want; fail(e); }
+    cb.disabled = false;
+    loadSetup().catch(fail);
+    refresh();
+  });
+  sw.append(cb, el("span", "track"), el("span", null, r.Autostart ? "Đang bật" : "Đang tắt"));
+  out.push(stepCard(5, { title: "Tự chạy khi đăng nhập", desc: "Ostiary khởi động cùng máy để không bỏ lỡ yêu cầu duyệt.", done: r.Autostart, controls: [sw] }));
+
+  if (r.PolkitMissing) {
+    const cmd = "sudo \"$(command -v ostiary)\" install-polkit";
+    const cb2 = el("div", "cmdbox");
+    cb2.append(el("pre", "cmd", cmd), copyBtn(cmd, "Copy lệnh"));
+    const ex = el("div");
+    ex.append(cb2, el("p", "muted", "rồi khởi động lại Ostiary."));
+    out.push(stepCard(6, { title: "Duyệt bằng mật khẩu máy", desc: "Để duyệt bằng hộp thoại mật khẩu của hệ điều hành thay vì mã, chạy một lần trong terminal:", optional: true, extra: ex }));
+  }
+  const first = out.findIndex((_, i) => i < 5 && !done[i]);
+  if (first >= 0) out[first].classList.add("current");
+
+  const list = el("ol", "steps");
+  list.append(...out);
+  const foot = el("div", "setupfoot");
+  if (n === 5) {
+    const p = el("div", "card success");
+    p.appendChild(icon("shieldcheck"));
+    p.appendChild(el("p", null, "Xong! Agent giờ dùng được các host bạn bật 'agent'."));
+    const g = button("Về màn Duyệt", "primary lg");
+    g.addEventListener("click", () => { location.hash = "#approvals"; });
+    p.appendChild(g);
+    foot.appendChild(p);
+  } else {
+    const h = button("Ẩn hướng dẫn", "ghost");
+    h.addEventListener("click", () => busy(h, async () => { await call("POST", "/api/setup/skip", { skip: true }); location.hash = "#approvals"; await setupGate(); }));
+    foot.appendChild(h);
+  }
+  box.replaceChildren(head, list, foot);
+}
+$("opensetup").addEventListener("click", () => busy($("opensetup"), async () => { await call("POST", "/api/setup/skip", { skip: false }); location.hash = "#setup"; }));
+$("setupchip").addEventListener("click", () => { location.hash = "#setup"; });
+
 function route() { // #req=N focuses a request; #hosts, #keychain... deep-link a view
   const h = location.hash.slice(1);
   showView(Object.hasOwn(VIEWS, h) ? h : "approvals");

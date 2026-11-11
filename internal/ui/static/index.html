@@ -19,17 +19,20 @@
       <button type="button" data-nav="knownhosts"><i data-icon="fingerprint"></i><span class="label">Known hosts</span></button>
       <button type="button" data-nav="log"><i data-icon="list"></i><span class="label">Nhật ký</span></button>
     </nav>
-    <div class="side-foot"><span id="conndot" class="dot" role="img" aria-label="Kết nối daemon"></span><span id="conntext">Đang kết nối</span><span id="version" class="ver"></span></div>
+    <div class="side-foot"><button type="button" id="opensetup" class="linkbtn">Hướng dẫn bắt đầu</button><span id="conndot" class="dot" role="img" aria-label="Kết nối daemon"></span><span id="conntext">Đang kết nối</span><span id="version" class="ver"></span></div>
   </aside>
   <div class="content">
     <header class="topbar">
       <h1 id="title">Duyệt</h1>
+      <button type="button" id="setupchip" class="chip accent hidden"></button>
       <span id="authmode" class="chip"></span>
       <button type="button" id="vaultstate" class="chip" title="Bấm để khóa hoặc mở khóa vault"></button>
       <button type="button" id="theme" class="iconbtn" aria-label="Đổi giao diện sáng/tối" title="Đổi giao diện sáng/tối"><i data-icon="moon"></i></button>
     </header>
     <div id="configwarn" class="banner hidden" role="alert"><i data-icon="alert"></i><div>Cấu hình trên đĩa (<span class="mono">hosts.toml</span> / <span class="mono">rules.toml</span>) đã thay đổi và chưa được duyệt: mọi yêu cầu của agent đang bị chặn. Kiểm tra lại thay đổi rồi bấm "Đọc lại cấu hình" ở màn hình Host.</div></div>
     <main>
+      <section class="view" data-view="setup" aria-labelledby="title"><div id="setupbox"></div></section>
+
       <section class="view" data-view="approvals" aria-labelledby="title">
         <div id="reqlist" class="reqs"></div>
         <div id="noreq" class="empty">
