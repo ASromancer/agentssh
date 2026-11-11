@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,118 @@ import (
 	"github.com/ASromancer/agentssh/internal/paths"
 	"github.com/ASromancer/agentssh/internal/policy"
 )
+
+// The text helpers below are shared by the CLI and the MCP server so agents
+// see the same output either way.
+
+func hostsText(hs []daemon.HostInfo) string {
+	if len(hs) == 0 {
+		return "no hosts available to agents here (the user enables them with 'agentssh host edit <name> --agent')\n"
+	}
+	var b strings.Builder
+	for _, h := range hs {
+		fmt.Fprintf(&b, "%s\t%s\t%s\n", h.Name, h.Profile, h.Description)
+	}
+	return b.String()
+}
+
+func runText(host string, r daemon.ExecReply) string {
+	return fmt.Sprintf("%s exit=%d %.1fs level=%s id=%d\n%s", host, r.Exit, float64(r.DurMs)/1000, r.Level, r.ID, r.Output)
+}
+
+func transferText(host, kind string, r daemon.ExecReply) string {
+	return fmt.Sprintf("%s %s ok %.1fs level=%s id=%d\n", host, kind, float64(r.DurMs)/1000, r.Level, r.ID)
+}
+
+func jobStartText(host string, r daemon.ExecReply) string {
+	return fmt.Sprintf("%s job started level=%s id=%d (agentssh job tail %d)\n", host, r.Level, r.ID, r.ID)
+}
+
+func jobTailText(id int, r daemon.JobReply) string {
+	state := "running"
+	if !r.Running {
+		state = fmt.Sprintf("exit=%d", r.Exit)
+	}
+	return fmt.Sprintf("job %d %s\n%s", id, state, r.Output)
+}
+
+func explainText(r daemon.ExplainReply) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "level=%s\n", r.Level)
+	for _, x := range r.Reasons {
+		fmt.Fprintf(&b, "  %-11s %s\n", x.Level, x.Text)
+	}
+	if r.HostOK {
+		fmt.Fprintf(&b, "host=%s profile=%s action=%s\n", r.Host, r.Profile, r.Action)
+	}
+	if r.Msg != "" {
+		b.WriteString(r.Msg + "\n")
+	}
+	return b.String()
+}
+
+// readOutput returns a stored output, optionally limited to a line range
+// "a:b" (1-based, inclusive) and filtered by a regexp (with line numbers).
+func readOutput(id int, grep, rng string) (string, error) {
+	b, err := os.ReadFile(daemon.OutPath(id))
+	if err != nil {
+		return "", fmt.Errorf("no output for id %d (outputs are kept 7 days)", id)
+	}
+	lines := strings.SplitAfter(string(b), "\n")
+	if lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	from, to := 1, len(lines)
+	if rng != "" {
+		a, z, ok := strings.Cut(rng, ":")
+		if !ok {
+			return "", errors.New("range must look like a:b")
+		}
+		if a != "" {
+			from, _ = strconv.Atoi(a)
+		}
+		if z != "" {
+			to, _ = strconv.Atoi(z)
+		}
+		from, to = max(from, 1), min(to, len(lines))
+	}
+	var re *regexp.Regexp
+	if grep != "" {
+		if re, err = regexp.Compile(grep); err != nil {
+			return "", fmt.Errorf("bad grep: %v", err)
+		}
+	}
+	var out strings.Builder
+	for i := from; i <= to; i++ {
+		l := strings.TrimSuffix(lines[i-1], "\n")
+		if re == nil {
+			out.WriteString(l + "\n")
+		} else if re.MatchString(l) {
+			fmt.Fprintf(&out, "%d: %s\n", i, l)
+		}
+	}
+	return out.String(), nil
+}
+
+// explainCmd classifies a command, through the daemon when it runs (host
+// rules apply) or locally with default + user rules otherwise.
+func explainCmd(e daemon.Env, cmd, host string) (daemon.ExplainReply, error) {
+	var r daemon.ExplainReply
+	if c, _ := daemon.Dial(); c != nil {
+		defer c.Close()
+		err := c.Call("A.Explain", &daemon.ExplainArgs{Env: e, Cmd: cmd, Host: host}, &r)
+		return r, err
+	}
+	eng, err := policy.Load(paths.Rules())
+	if err != nil {
+		return r, err
+	}
+	r.Result = eng.Classify(cmd, nil, nil)
+	if host != "" {
+		r.Msg = "daemon not running; host rules not applied"
+	}
+	return r, nil
+}
 
 func cmdHosts(args []string) int {
 	fs := newFlags("hosts")
@@ -36,12 +149,7 @@ func cmdHosts(args []string) int {
 		json.NewEncoder(os.Stdout).Encode(r.Hosts)
 		return 0
 	}
-	if len(r.Hosts) == 0 {
-		fmt.Println("no hosts available to agents here (the user enables them with 'agentssh host edit <name> --agent')")
-	}
-	for _, h := range r.Hosts {
-		fmt.Printf("%s\t%s\t%s\n", h.Name, h.Profile, h.Description)
-	}
+	fmt.Print(hostsText(r.Hosts))
 	return 0
 }
 
@@ -97,8 +205,7 @@ func cmdRun(args []string) int {
 			"level": r.Level, "id": r.ID, "output": r.Output, "error": r.Msg})
 		return r.Exit
 	}
-	fmt.Printf("%s exit=%d %.1fs level=%s id=%d\n", pos[0], r.Exit, float64(r.DurMs)/1000, r.Level, r.ID)
-	fmt.Print(r.Output)
+	fmt.Print(runText(pos[0], r))
 	return finish(r)
 }
 
@@ -117,45 +224,11 @@ func cmdOut(args []string) int {
 	if err != nil {
 		return errf(2, "bad id %q", pos[0])
 	}
-	b, err := os.ReadFile(daemon.OutPath(id))
+	out, err := readOutput(id, *grep, *rng)
 	if err != nil {
-		return errf(1, "no output for id %d (outputs are kept 7 days)", id)
+		return errf(1, "%v", err)
 	}
-	lines := strings.SplitAfter(string(b), "\n")
-	if lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
-	}
-	from, to := 1, len(lines)
-	if *rng != "" {
-		a, z, ok := strings.Cut(*rng, ":")
-		if !ok {
-			return errf(2, "--range must look like a:b")
-		}
-		if a != "" {
-			from, _ = strconv.Atoi(a)
-		}
-		if z != "" {
-			to, _ = strconv.Atoi(z)
-		}
-		from, to = max(from, 1), min(to, len(lines))
-	}
-	var re *regexp.Regexp
-	if *grep != "" {
-		if re, err = regexp.Compile(*grep); err != nil {
-			return errf(2, "bad --grep: %v", err)
-		}
-	}
-	for i := from; i <= to; i++ {
-		l := lines[i-1]
-		if re == nil {
-			fmt.Print(l)
-		} else if re.MatchString(strings.TrimSuffix(l, "\n")) {
-			fmt.Printf("%d: %s", i, l)
-		}
-		if !strings.HasSuffix(l, "\n") {
-			fmt.Println()
-		}
-	}
+	fmt.Print(out)
 	return 0
 }
 
@@ -189,7 +262,7 @@ func transfer(kind string, args []string) int {
 		return code
 	}
 	if r.Exit == 0 {
-		fmt.Printf("%s %s ok %.1fs level=%s id=%d\n", host, kind, float64(r.DurMs)/1000, r.Level, r.ID)
+		fmt.Print(transferText(host, kind, r))
 	}
 	return finish(r)
 }
@@ -220,7 +293,7 @@ func cmdJob(args []string) int {
 		if r.Msg != "" {
 			return finish(r)
 		}
-		fmt.Printf("%s job started level=%s id=%d (agentssh job tail %d)\n", pos[0], r.Level, r.ID, r.ID)
+		fmt.Print(jobStartText(pos[0], r))
 		return 0
 	case "tail", "kill":
 		if len(pos) != 1 {
@@ -244,11 +317,7 @@ func cmdJob(args []string) int {
 			fmt.Printf("job %d killed\n", id)
 			return 0
 		}
-		state := "running"
-		if !r.Running {
-			state = fmt.Sprintf("exit=%d", r.Exit)
-		}
-		fmt.Printf("job %d %s\n%s", id, state, r.Output)
+		fmt.Print(jobTailText(id, r))
 		return 0
 	}
 	return errf(2, "unknown job subcommand %q", sub)
@@ -264,56 +333,37 @@ func cmdExplain(args []string) int {
 	if len(pos) != 1 {
 		return errf(2, `usage: agentssh explain "<cmd>" [--host <host>]`)
 	}
-	var r daemon.ExplainReply
-	if c, _ := daemon.Dial(); c != nil {
-		defer c.Close()
-		if err := c.Call("A.Explain", &daemon.ExplainArgs{Env: env(), Cmd: pos[0], Host: *host}, &r); err != nil {
-			return callErr(err)
-		}
-	} else {
-		// Without the daemon, explain still works with default + user rules.
-		eng, err := policy.Load(paths.Rules())
-		if err != nil {
-			return errf(1, "%v", err)
-		}
-		r.Result = eng.Classify(pos[0], nil, nil)
-		if *host != "" {
-			r.Msg = "daemon not running; host rules not applied"
-		}
+	r, err := explainCmd(env(), pos[0], *host)
+	if err != nil {
+		return callErr(err)
 	}
-	fmt.Printf("level=%s\n", r.Level)
-	for _, x := range r.Reasons {
-		fmt.Printf("  %-11s %s\n", x.Level, x.Text)
-	}
-	if r.HostOK {
-		fmt.Printf("host=%s profile=%s action=%s\n", r.Host, r.Profile, r.Action)
-	}
-	if r.Msg != "" {
-		fmt.Println(r.Msg)
-	}
+	fmt.Print(explainText(r))
 	return 0
+}
+
+// daemonExplain asks the daemon for the action on host, with a short timeout
+// so a hung daemon never blocks the agent.
+func daemonExplain(host, cmd, cwd string) (string, error) {
+	c, err := daemon.Dial()
+	if err != nil {
+		return "", err
+	}
+	defer c.Close()
+	var r daemon.ExplainReply
+	call := c.Go("A.Explain", &daemon.ExplainArgs{Env: daemon.Env{Cwd: cwd}, Cmd: cmd, Host: host}, &r, nil)
+	select {
+	case <-call.Done:
+		return r.Action, call.Error
+	case <-time.After(3 * time.Second):
+		return "", fmt.Errorf("timeout")
+	}
 }
 
 func cmdHook(args []string) int {
 	if len(args) != 1 || args[0] != "claude" {
 		return errf(2, "usage: agentssh hook claude (reads a PreToolUse event on stdin)")
 	}
-	explain := func(host, cmd, cwd string) (string, error) {
-		c, err := daemon.Dial()
-		if err != nil {
-			return "", err
-		}
-		defer c.Close()
-		var r daemon.ExplainReply
-		call := c.Go("A.Explain", &daemon.ExplainArgs{Env: daemon.Env{Cwd: cwd}, Cmd: cmd, Host: host}, &r, nil)
-		select {
-		case <-call.Done:
-			return r.Action, call.Error
-		case <-time.After(3 * time.Second):
-			return "", fmt.Errorf("timeout")
-		}
-	}
-	if err := hook.Claude(os.Stdin, os.Stdout, []string{paths.Config(), paths.State()}, explain); err != nil {
+	if err := hook.Claude(os.Stdin, os.Stdout, []string{paths.Config(), paths.State()}, daemonExplain); err != nil {
 		// Never break the agent on a malformed event: no output = normal flow.
 		fmt.Fprintf(os.Stderr, "agentssh hook: %v\n", err)
 	}

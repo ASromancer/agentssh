@@ -321,6 +321,41 @@ def main():
         check(hook('agentssh run e2e "cat /etc/shadow"') == "deny", "hook denies forbidden")
         check(hook("agentssh approve") == "deny", "hook denies human-only commands")
 
+        # MCP server over stdio, same daemon and policy.
+        mcp = subprocess.Popen([BIN, "mcp", "--cwd", TMP], env=ENV, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        def rpc(i, method, params=None):
+            mcp.stdin.write(json.dumps({"jsonrpc": "2.0", "id": i, "method": method, "params": params or {}}) + "\n")
+            mcp.stdin.flush()
+            return json.loads(mcp.stdout.readline())
+        def tool(i, name, **args):
+            r = rpc(i, "tools/call", {"name": name, "arguments": args})["result"]
+            return r["content"][0]["text"], r["isError"]
+        init = rpc(1, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "e2e", "version": "0"}})
+        mcp.stdin.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n')
+        check(init["result"]["serverInfo"]["name"] == "agentssh" and len(rpc(2, "tools/list")["result"]["tools"]) == 9,
+              "mcp initialize + tools/list")
+        text, err = tool(3, "run", host="e2e", command="echo via-mcp")
+        check(not err and "level=read" in text and "via-mcp" in text, "mcp run read", text)
+        text, err = tool(4, "run", host="e2e", command="cat /etc/shadow")
+        check(err and "code 100" in text, "mcp blocks forbidden", text)
+        victim3 = os.path.join(remote, "victim3")
+        open(victim3, "w").write("x")
+        text, err = tool(5, "run", host="e2e", command=f"rm {victim3}")
+        aid = int(re.search(r"approval_id=(\d+)", text).group(1))
+        check(not err and "approval required" in text, "mcp returns approval id instead of blocking", text)
+        t = Tty("approve")
+        t.expect(r"DESTRUCTIVE")
+        t.expect(r"approval code \(from the desktop notification\): ")
+        t.send(last_code())
+        t.expect(r"\[y\] once")
+        t.send("y")
+        t.expect("approved once")
+        t.p.kill()
+        text, err = tool(6, "run", host="e2e", command=f"rm {victim3}", approval_id=aid)
+        check(not err and "exit=0" in text and not os.path.exists(victim3), "mcp run after approval", text)
+        mcp.stdin.close()
+        check(mcp.wait(timeout=10) == 0, "mcp exits on EOF")
+
         rc, out, _ = run("log", "-n", "100")
         check("approved" in out and "forbidden" in out and "denied" in out and "payload" not in out,
               "audit log has decisions and no output", out)

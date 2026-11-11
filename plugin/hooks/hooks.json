@@ -1,0 +1,11 @@
+{
+  "description": "agentssh soft layer: deny direct ssh/scp/rsync and human-only agentssh commands, ask before state-changing remote commands, protect agentssh config.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [{ "type": "command", "command": "agentssh hook claude", "timeout": 10 }]
+      }
+    ]
+  }
+}

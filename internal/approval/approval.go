@@ -141,17 +141,32 @@ func (q *Queue) finish(id int, d Decision) {
 // Wait blocks until request id is decided or times out. ok=false means the
 // id is unknown.
 func (q *Queue) Wait(id int) (Request, Decision, bool) {
+	r, d, _, ok := q.WaitFor(id, 0)
+	return r, d, ok
+}
+
+// WaitFor is Wait with a limit: done=false means the human has not
+// decided within max (0 = no limit) and the request is still pending.
+func (q *Queue) WaitFor(id int, max time.Duration) (r Request, d Decision, done, ok bool) {
 	q.mu.Lock()
 	e, ok := q.pending[id]
 	q.mu.Unlock()
 	if !ok {
-		return Request{}, Decision{}, false
+		return Request{}, Decision{}, false, false
 	}
-	d := <-e.done
+	var limit <-chan time.Time
+	if max > 0 {
+		limit = time.After(max)
+	}
+	select {
+	case d = <-e.done:
+	case <-limit:
+		return e.req, Decision{}, false, true
+	}
 	q.mu.Lock()
 	delete(q.pending, id)
 	q.mu.Unlock()
-	return e.req, d, true
+	return e.req, d, true, true
 }
 
 func (q *Queue) Pending() []Request {

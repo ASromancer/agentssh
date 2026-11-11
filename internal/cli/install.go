@@ -1,17 +1,15 @@
 package cli
 
 import (
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-)
 
-//go:embed skill.md
-var skillMD string
+	"github.com/ASromancer/agentssh/plugin"
+)
 
 const (
 	hookMatcher  = "Bash|Edit|Write|MultiEdit|NotebookEdit"
@@ -45,7 +43,7 @@ func cmdInstallHooks(args []string) int {
 // rules for direct ssh to ~/.claude/settings.json, keeping everything else.
 func installClaude() error {
 	home, _ := os.UserHomeDir()
-	if err := writeFile(filepath.Join(home, ".claude", "skills", "agentssh", "SKILL.md"), skillMD); err != nil {
+	if err := writeFile(filepath.Join(home, ".claude", "skills", "agentssh", "SKILL.md"), plugin.Skill); err != nil {
 		return err
 	}
 	exe, err := os.Executable()

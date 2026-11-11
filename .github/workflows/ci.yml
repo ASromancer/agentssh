@@ -41,7 +41,7 @@ jobs:
         run: |
           for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
             os=${t%/*}; arch=${t#*/}; ext=""; [ "$os" = windows ] && ext=.exe
-            GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o dist/agentssh-$os-$arch$ext .
+            GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X github.com/ASromancer/agentssh/internal/cli.Version=${GITHUB_REF_NAME#v}" -o dist/agentssh-$os-$arch$ext .
           done
           (cd dist && sha256sum * > SHA256SUMS)
       - uses: actions/upload-artifact@v4

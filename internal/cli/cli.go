@@ -25,6 +25,7 @@ For agents:
   agentssh put <local-path> <host>:<remote-path>
   agentssh job start <host> "<cmd>" | job tail <id> [--lines N] | job kill <id>
   agentssh explain "<cmd>" [--host <host>]
+  agentssh mcp [--cwd <dir>]          stdio MCP server with the same tools
 
 For the human user (need a real terminal; most need a code from a desktop notification):
   agentssh init [--passphrase] | unlock | lock | approve | reload | doctor | daemon
@@ -37,6 +38,9 @@ Exit codes: the remote command's own code, or
   100 blocked by policy, 101 denied / approval timed out, 102 daemon not running or vault locked.
 Only errors produced by agentssh itself print a stderr line starting with "agentssh:".
 `
+
+// Version is set at release time with -ldflags "-X .../internal/cli.Version=x.y.z".
+var Version = "dev"
 
 var guidance = map[int]string{
 	daemon.CodeBlocked:  "blocked by policy: do not retry another way; tell the user what you wanted to do",
@@ -55,7 +59,8 @@ func Main(args []string) int {
 		"job": cmdJob, "explain": cmdExplain, "hook": cmdHook,
 		"init": cmdInit, "unlock": cmdUnlock, "lock": cmdLock, "approve": cmdApprove,
 		"reload": cmdReload, "host": cmdHost, "key": cmdKey, "log": cmdLog, "doctor": cmdDoctor,
-		"install-hooks": cmdInstallHooks, "daemon": cmdDaemon,
+		"install-hooks": cmdInstallHooks, "daemon": cmdDaemon, "mcp": cmdMCP,
+		"version": func([]string) int { fmt.Println("agentssh", Version); return 0 },
 	}
 	if f, ok := cmds[args[0]]; ok {
 		return f(args[1:])

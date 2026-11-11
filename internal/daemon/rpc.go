@@ -45,7 +45,8 @@ type ExecArgs struct {
 	Remote     string // get, put
 	Local      string // get, put (absolute)
 	Timeout    time.Duration
-	ApprovalID int // second call after the request was approved
+	ApprovalID int           // second call after the request was approved
+	WaitMax    time.Duration // with ApprovalID: give up waiting after this (0 = until decided); Pending is set again
 }
 
 type ExecReply struct {

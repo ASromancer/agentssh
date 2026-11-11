@@ -89,3 +89,16 @@ func TestTicket(t *testing.T) {
 		t.Fatal("ticket reused")
 	}
 }
+
+func TestWaitForLimit(t *testing.T) {
+	s := &sink{}
+	q := NewQueue(s.notify, time.Minute)
+	q.Add(Request{ID: 9})
+	if _, _, done, ok := q.WaitFor(9, 20*time.Millisecond); done || !ok {
+		t.Fatalf("done=%v ok=%v", done, ok)
+	}
+	q.Decide(9, s.code(), "y", "")
+	if _, d, done, _ := q.WaitFor(9, time.Second); !done || !d.OK {
+		t.Fatalf("after decision: %+v", d)
+	}
+}
