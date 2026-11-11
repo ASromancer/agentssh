@@ -73,6 +73,9 @@ func cmdDaemon(args []string) int {
 	d.SetRespawn(func(old int) error {
 		return startDetached(filepath.Join(paths.State(), "daemon.log"), detachArgs(*noUI, *noTray, *uiPort, old))
 	})
+	if home, err := os.UserHomeDir(); err == nil {
+		refreshCodexRules(home)
+	}
 	d.SetSetup(daemon.SetupFuncs{
 		Agents: func() []daemon.AgentState {
 			home, _ := os.UserHomeDir()

@@ -25,7 +25,9 @@ You never hold SSH keys. A local daemon runs commands for you, classifies each o
 - Any code from the remote command is passed through unchanged.
 - `100` blocked by policy (forbidden command, profile does not allow it, host not allowed).
 - `101` the user denied the request or did not answer in time.
-- `102` the daemon is not running or the vault is locked.
+- `102` the daemon is not running or the vault is locked. If you run inside a sandbox (Codex), the
+  sandbox may be what blocks ostiary's local socket: re-run the same ostiary command outside the
+  sandbox (escalated) before asking the user.
 - Only errors produced by ostiary itself print a stderr line starting with `ostiary:`.
 
 ## Rules

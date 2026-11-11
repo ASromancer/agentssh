@@ -244,8 +244,17 @@ const codexBlock = codexBegin + `
 Never call ssh, scp, sftp, rsync (to remote hosts) or mosh directly. Use ostiary (see the ostiary skill):
 ` + "`ostiary hosts`, `ostiary run <host> \"<cmd>\"`, `ostiary out <id> --grep <re>`" + `.
 Exit 100 = blocked by policy, 101 = denied by the user or timed out, 102 = daemon down or vault locked.
-On 101 stop and ask the user; never retry another way. Never run (also as ostiary-app) approve, key, reload, host, init, unlock, install-hooks, daemon, ui, open, stop, upgrade, install-service, uninstall-service.
+On 101 stop and ask the user; never retry another way. On 102 inside the sandbox, first re-run the same ostiary command outside the sandbox (escalated): the sandbox blocks ostiary's local daemon socket. Never run (also as ostiary-app) approve, key, reload, host, init, unlock, install-hooks, daemon, ui, open, stop, upgrade, install-service, uninstall-service.
 ` + codexEnd + "\n"
+
+// refreshCodexRules rewrites our Codex rules file when it is already
+// installed, so an upgrade brings new rules without re-running install-hooks.
+func refreshCodexRules(home string) {
+	p := filepath.Join(codexHome(home), "rules", "ostiary.rules")
+	if b, err := os.ReadFile(p); err == nil && string(b) != codexRules() {
+		_ = writeFile(p, codexRules())
+	}
+}
 
 func codexRules() string {
 	var b strings.Builder
@@ -258,6 +267,10 @@ func codexRules() string {
 			fmt.Fprintf(&b, "prefix_rule(pattern=[%q, %q], decision=\"forbidden\", justification=\"%s %s is for the human user only\")\n", bin, s, bin, s)
 		}
 	}
+	// Codex's sandbox blocks the daemon's local socket, so ostiary must run
+	// outside it. The daemon still classifies, approves and audits every
+	// command; the forbidden rules above win over this one (strictest wins).
+	b.WriteString("prefix_rule(pattern=[\"ostiary\"], decision=\"allow\", justification=\"ostiary is the SSH gate; it must reach its local daemon outside the sandbox\")\n")
 	return b.String()
 }
 
