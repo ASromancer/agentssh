@@ -28,7 +28,8 @@ jobs:
         run: |
           command -v sshd || sudo apt-get install -y openssh-server
           go build -o "$RUNNER_TEMP/agentssh" .
-          python3 scripts/e2e.py "$RUNNER_TEMP/agentssh"
+          go build -tags e2efake -o "$RUNNER_TEMP/agentssh-fake" .
+          E2E_FAKE_BIN="$RUNNER_TEMP/agentssh-fake" python3 scripts/e2e.py "$RUNNER_TEMP/agentssh"
   build-unix-windows:
     needs: test
     runs-on: ubuntu-latest

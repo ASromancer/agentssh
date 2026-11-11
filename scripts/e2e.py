@@ -14,6 +14,7 @@ BIN = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else "agentssh")
 SSHD = shutil.which("sshd") or "/usr/sbin/sshd"
 TMP = tempfile.mkdtemp(prefix="agentssh-e2e-")
 HOME = os.path.join(TMP, "home")
+FAKE_BIN = os.environ.get("E2E_FAKE_BIN")  # agentssh built with -tags e2efake
 PASS = "correct horse battery"
 os.makedirs(HOME)
 
@@ -245,8 +246,6 @@ def main():
         check("waiting approval #" in line, "mutate from Codex needs out-of-band approval (no soft ask)", line)
         t = Tty("approve")
         t.expect(r"agent=codex")
-        t.expect(r"approval code \(from the desktop notification\): ")
-        t.send(last_code())
         t.expect(r"\[y\] once")
         t.send("n")
         t.expect("denied")
@@ -277,15 +276,15 @@ def main():
         t.expect(r"level: .*DESTRUCTIVE")
         t.expect(r"rm " + re.escape(victim))
         code = last_code()
+        t.expect(r"\[y\] once")
+        t.send("y")
         t.expect(r"approval code \(from the desktop notification\): ")
         t.send("ZZZZ")
+        t.expect(r"tries left")
         t.expect(r"\[y\] once")
         t.send("y")
-        t.expect(r"tries left")
         t.expect(r"approval code \(from the desktop notification\): ")
         t.send(code)
-        t.expect(r"\[y\] once")
-        t.send("y")
         t.expect("approved once")
         out, err = agent.communicate(timeout=30)
         check(agent.returncode == 0 and "waiting approval #" in err and not os.path.exists(victim),
@@ -299,12 +298,12 @@ def main():
         t = Tty("approve")
         t.expect(r"DESTRUCTIVE")
         code = last_code()
-        t.expect(r"approval code \(from the desktop notification\): ")
-        t.send(code)
         t.expect(r"\[y\] once")
         t.send("m")
         t.expect("message for the agent: ")
         t.send("use logrotate instead")
+        t.expect(r"approval code \(from the desktop notification\): ")
+        t.send(code)
         out, err = agent.communicate(timeout=30)
         check(agent.returncode == 101 and "use logrotate instead" in err and os.path.exists(victim2),
               "denial with message gives 101", out + err)
@@ -374,10 +373,10 @@ def main():
         check(not err and "approval required" in text, "mcp returns approval id instead of blocking", text)
         t = Tty("approve")
         t.expect(r"DESTRUCTIVE")
-        t.expect(r"approval code \(from the desktop notification\): ")
-        t.send(last_code())
         t.expect(r"\[y\] once")
         t.send("y")
+        t.expect(r"approval code \(from the desktop notification\): ")
+        t.send(last_code())
         t.expect("approved once")
         t.p.kill()
         text, err = tool(6, "run", host="e2e", command=f"rm {victim3}", approval_id=aid)
@@ -418,6 +417,46 @@ def main():
         rc, _, err = run("run", "e2e", "echo hi")
         check(rc == 102 and "locked" in err, "lock wipes keys: 102")
 
+        if FAKE_BIN:
+            os.kill(daemon_pid, signal.SIGTERM)
+            time.sleep(0.5)
+            gate = os.path.join(TMP, "humanok")
+            open(gate, "w").write("deny")
+            ENV["AGENTSSH_E2E_HUMANOK"] = gate
+            out = subprocess.run([FAKE_BIN, "daemon", "--detach"], env=ENV, capture_output=True, text=True).stdout
+            daemon_pid = int(re.search(r"pid (\d+)", out).group(1))
+            for _ in range(50):
+                if os.path.exists(ENV["AGENTSSH_SOCKET"]):
+                    break
+                time.sleep(0.1)
+            t = Tty("unlock")
+            t.expect("vault passphrase: ")
+            t.send(PASS)
+            t.wait()
+            rc, out, _ = run("doctor")
+            check("approvals use OS authentication" in out, "doctor reports OS authentication", out)
+            victim4 = os.path.join(remote, "victim4")
+            open(victim4, "w").write("x")
+            agent = subprocess.Popen([BIN, "run", "e2e", f"rm {victim4}"], env=ENV, stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            t = Tty("approve")
+            t.expect(r"DESTRUCTIVE")
+            t.expect(r"\[y\] once")
+            t.send("y")
+            t.expect("not confirmed")          # OS dialog refused
+            open(gate, "w").write("allow")
+            t.expect(r"\[y\] once")
+            t.send("y")
+            t.expect("approved once")
+            out, err = agent.communicate(timeout=30)
+            log = open(gate + ".log").read()
+            check(agent.returncode == 0 and not os.path.exists(victim4) and f"rm {victim4}" in log,
+                  "approve via OS authentication (no code), dialog shows the command", out + err + log)
+            t.p.kill()
+            t = Tty("key", "gen", "osauth")
+            t.expect(r"ssh-ed25519 ")
+            check(t.wait() == 0 and "key-gen osauth" in open(gate + ".log").read(), "admin op via OS authentication")
+            ENV.pop("AGENTSSH_E2E_HUMANOK")
         os.kill(daemon_pid, signal.SIGTERM)
         daemon_pid = None
         time.sleep(0.5)

@@ -29,7 +29,7 @@ For agents:
   agentssh mcp [--cwd <dir>]          stdio MCP server with the same tools
 
 For the human user (need a real terminal; most need a code from a desktop notification):
-  agentssh init [--passphrase] | unlock | lock | approve | reload | doctor | daemon
+  agentssh init [--passphrase] | unlock | lock | approve | reload | doctor | daemon | install-polkit
   agentssh host add|edit|ls|rm|trust ...
   agentssh key gen|import|export|ls|rm ...
   agentssh log [--follow] [-n N]
@@ -67,7 +67,7 @@ func Main(args []string) int {
 		"job": cmdJob, "explain": cmdExplain, "hook": cmdHook,
 		"init": cmdInit, "unlock": cmdUnlock, "lock": cmdLock, "approve": cmdApprove,
 		"reload": cmdReload, "host": cmdHost, "key": cmdKey, "log": cmdLog, "doctor": cmdDoctor,
-		"install-hooks": cmdInstallHooks, "daemon": cmdDaemon, "mcp": cmdMCP,
+		"install-hooks": cmdInstallHooks, "daemon": cmdDaemon, "install-polkit": cmdInstallPolkit, "mcp": cmdMCP,
 		"version": func([]string) int { fmt.Println("agentssh", Version); return 0 },
 	}
 	if f, ok := cmds[args[0]]; ok {

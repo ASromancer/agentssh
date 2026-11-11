@@ -134,17 +134,25 @@ The daemon reads `hosts.toml` and `rules.toml` only at startup and on `agentssh 
 
 ## Approvals
 
+Approvals and admin operations (key generation, host edits, ...) are confirmed through your operating system's authentication dialog, opened by the daemon itself:
+
+- **Linux:** polkit (password prompt). Run `sudo agentssh install-polkit` once, then `systemctl --user restart agentssh`.
+- **macOS:** Touch ID, or your macOS password.
+- **Windows:** your Windows password.
+
 When the agent runs something destructive:
 
 1. The agent's command blocks. It prints `waiting approval #12 — run 'agentssh approve' in another terminal`.
-2. You get a desktop notification, for example `web1: rm -rf /var/log/old [destructive] code: K7Q4`.
-3. You run `agentssh approve`. It shows the exact command with the risky parts highlighted and the reasons. Type the code, then choose:
+2. You get a desktop notification, for example `web1: rm -rf /var/log/old [destructive]`.
+3. You run `agentssh approve`. It shows the exact command with the risky parts highlighted and the reasons. Choose:
    - `y`: allow once
    - `s`: allow the identical command on that host for 30 minutes
    - `n`: deny
    - `m`: deny with a message that is passed back to the agent
 
-Three wrong codes deny the request.
+   For `y`, `s` and `m` the OS dialog appears and shows the command; cancelling it leaves the request pending. Denials (`n`) need no authentication.
+
+**Fallback:** without OS authentication (no graphical session, polkit action not installed), codes remain: the notification carries a code that you type after choosing. Three wrong codes deny the request. `agentssh doctor` shows which mode is active.
 
 ## Threat model — read this
 
@@ -155,7 +163,7 @@ Three wrong codes deny the request.
 
   It does **not** protect against a malicious process running as your user that attacks deliberately. Such a process can read the OS keyring, debug the daemon, or read your screen.
 - **Hardened mode (planned for V1.1):** the daemon runs as a separate system user, so agents cannot read the vault, the config or the daemon's memory. This is a real security boundary.
-- **If desktop notifications don't work**, the approval code is shown in the terminal instead. An agent that can fake a TTY could then approve its own requests. `agentssh doctor` warns about this.
+- Approvals and admin operations are confirmed through the operating system's authentication dialog, triggered by the daemon itself; a caller of the daemon (including an agent) cannot complete them without the human passing that dialog. Without OS authentication (no graphical session, polkit action not installed), agentssh falls back to codes from desktop notifications, which a same-user process could read; `agentssh doctor` shows which mode is active.
 - **Agent hooks are a soft layer.** They deny direct `ssh`/`scp`/`rsync`, deny human-only `agentssh` subcommands, and keep agents out of agentssh's own files. In Claude Code they also ask you before `mutate` commands. The daemon enforces forbidden commands, profiles and approvals whether or not a hook is installed.
 - **The agent name is self-reported.** The CLI derives it from environment variables such as `CLAUDECODE`, `CODEX_*` and `GEMINI_CLI`, so a caller can claim to be Claude Code. That only affects whether a `mutate` command on a `standard` host gets an in-chat ask or an out-of-band approval. It never bypasses forbidden commands or destructive approvals.
 - **Classification is best-effort static analysis.** It handles quoting, escapes, wrappers, nested shells, globs on sensitive paths and dynamic command names; dynamic or unknown constructs are classified upward. Interpreters such as `python -c` count as plain `mutate`.

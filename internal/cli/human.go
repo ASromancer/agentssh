@@ -20,6 +20,7 @@ import (
 	"github.com/ASromancer/agentssh/internal/audit"
 	"github.com/ASromancer/agentssh/internal/daemon"
 	"github.com/ASromancer/agentssh/internal/hosts"
+	"github.com/ASromancer/agentssh/internal/humanok"
 	"github.com/ASromancer/agentssh/internal/paths"
 	"github.com/ASromancer/agentssh/internal/policy"
 	"github.com/ASromancer/agentssh/internal/vault"
@@ -77,6 +78,14 @@ func admin(t *term, a daemon.AdminArgs) (string, int) {
 		t.printf("desktop notification failed; approval code: %s\n", b.Code)
 	}
 	a.Ticket = b.Ticket
+	if b.OSAuth {
+		t.printf("confirm in the system authentication dialog…\n")
+		var r daemon.AdminReply
+		if err := c.Call("A.Admin", &a, &r); err != nil {
+			return "", errf(1, "%v", err)
+		}
+		return r.Out, 0
+	}
 	for {
 		a.Code = t.prompt("approval code (from the desktop notification): ")
 		var r daemon.AdminReply
@@ -190,6 +199,11 @@ func cmdApprove(args []string) int {
 		return code
 	}
 	defer c.Close()
+	var st daemon.StatusReply
+	if err := c.Call("A.Status", &daemon.Empty{}, &st); err != nil {
+		return callErr(err)
+	}
+	osAuth := st.Auth == "os"
 	handled, waiting := 0, false
 	for {
 		var reqs []approval.Request
@@ -208,7 +222,7 @@ func cmdApprove(args []string) int {
 			continue
 		}
 		for _, r := range reqs {
-			decideOne(t, c, r)
+			decideOne(t, c, r, osAuth)
 			handled++
 		}
 	}
@@ -216,7 +230,7 @@ func cmdApprove(args []string) int {
 
 func decideOne(t *term, c interface {
 	Call(string, any, any) error
-}, r approval.Request) {
+}, r approval.Request, osAuth bool) {
 	t.printf("\n%s#%d%s  %s  agent=%s  kind=%s\n", bold, r.ID, reset, r.Time.Format("2006-01-02 15:04:05"), orDash(r.Agent), r.Kind)
 	t.printf("host:  %s (user %s)\ncwd:   %s\nrepo:  %s\n", r.Host, orDash(r.User), orDash(r.Cwd), orDash(r.Repo))
 	t.printf("level: %s%s%s\n", red, strings.ToUpper(r.Level), reset)
@@ -234,7 +248,6 @@ func decideOne(t *term, c interface {
 		t.printf("desktop notification failed; approval code: %s\n", r.Code)
 	}
 	for {
-		code := t.prompt("approval code (from the desktop notification): ")
 		choice := ""
 		for choice == "" {
 			switch a := strings.ToLower(t.prompt("[y] once  [s] same command 30 min  [n] deny  [m] deny with message: ")); a {
@@ -242,9 +255,16 @@ func decideOne(t *term, c interface {
 				choice = a
 			}
 		}
-		note := ""
+		note, code := "", ""
 		if choice == "m" {
 			note = t.prompt("message for the agent: ")
+		}
+		switch {
+		case choice == "n":
+		case osAuth:
+			t.printf("confirm in the system authentication dialog…\n")
+		default:
+			code = t.prompt("approval code (from the desktop notification): ")
 		}
 		err := c.Call("A.Decide", &daemon.DecideArgs{ID: r.ID, Code: code, Choice: choice, Note: note}, &daemon.Empty{})
 		if err == nil {
@@ -252,10 +272,18 @@ func decideOne(t *term, c interface {
 			return
 		}
 		t.printf("%v\n", err)
-		if !strings.Contains(err.Error(), "tries left") {
+		if !strings.Contains(err.Error(), "tries left") && !strings.Contains(err.Error(), "not confirmed") {
 			return
 		}
 	}
+}
+
+func cmdInstallPolkit(args []string) int {
+	if err := humanok.InstallPolicy(); err != nil {
+		return errf(1, "%v", err)
+	}
+	fmt.Println("installed", humanok.PolicyPath, "— restart the daemon: systemctl --user restart agentssh")
+	return 0
 }
 
 func orDash(s string) string {
@@ -540,6 +568,11 @@ func cmdDoctor(args []string) int {
 			}
 			if st.UserOnly {
 				warn("config changed on disk; agent requests are refused until 'agentssh reload'")
+			}
+			if st.Auth == "os" {
+				ok("approvals use OS authentication")
+			} else {
+				warn("approvals use codes from desktop notifications (" + st.AuthNote + ")")
 			}
 		}
 		c.Close()
