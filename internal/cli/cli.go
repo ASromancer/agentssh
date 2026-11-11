@@ -28,7 +28,8 @@ For agents:
   agentssh explain "<cmd>" [--host <host>]
   agentssh mcp [--cwd <dir>]          stdio MCP server with the same tools
 
-For the human user (need a real terminal; most need a code from a desktop notification):
+For the human user (need a real terminal; approvals and admin commands are confirmed
+in an OS authentication dialog, or with a code from a desktop notification as a fallback):
   agentssh init [--passphrase] | unlock | lock | approve | reload | doctor | daemon | install-polkit
   agentssh host add|edit|ls|rm|trust ...
   agentssh key gen|import|export|ls|rm ...

@@ -4,7 +4,7 @@ SSH for AI coding agents (Claude Code, Codex) without handing them your keys.
 
 - **The agent never sees a private key.** Keys live in an encrypted vault; a local daemon holds them in memory and runs commands for the agent.
 - **Every command is classified deterministically (no LLM)** as `read`, `mutate`, `destructive` or `forbidden`, by parsing it with a real shell parser (pipes, `&&`, subshells, `$(...)`, `sudo`/`env`/`xargs` wrappers, `bash -c '...'`).
-- **Destructive commands need a human**, who approves in a separate terminal with a code from a desktop notification. The approval screen shows the exact command and the risk the tool computed, never the agent's description of it.
+- **Destructive commands need a human**, who approves in a separate terminal and confirms in the operating system's authentication dialog (codes from desktop notifications are the fallback). The approval screen shows the exact command and the risk the tool computed, never the agent's description of it.
 - **Forbidden commands are always blocked**: reading `~/.ssh`, `/etc/shadow` or sudoers, `curl … | sh`, reverse shells.
 - **Output is compact.** Long output keeps the first and last 40 lines; the rest is one `agentssh out <id> --grep …` away.
 - **Everything is audited** to a JSONL file.
@@ -30,7 +30,7 @@ agentssh host trust web1                # compare the fingerprint, then pin the 
 agentssh doctor
 ```
 
-Use one key per agent, not your personal key. Admin commands (`host`, `key`, `reload`, `approve`, `trust`) must run in a real terminal, and each one asks for a 4-character code sent as a desktop notification.
+Use one key per agent, not your personal key. Admin commands (`host`, `key`, `reload`, `approve`, `trust`) must run in a real terminal, and each one is confirmed in the OS authentication dialog, or with a code as a fallback (see [Approvals](#approvals)).
 
 ## What the agent uses
 
@@ -130,15 +130,17 @@ max_profile = "standard"
 
 The daemon finds this file by walking up from the agent's working directory. It can only narrow access, never widen it. Because the client reports its own working directory, this file is a convenience scope and not a security boundary.
 
-The daemon reads `hosts.toml` and `rules.toml` only at startup and on `agentssh reload` (which needs a code). If the files changed on disk since you last approved them, the daemon refuses every agent request until you run `agentssh reload`.
+The daemon reads `hosts.toml` and `rules.toml` only at startup and on `agentssh reload` (which you confirm like any admin operation). If the files changed on disk since you last approved them, the daemon refuses every agent request until you run `agentssh reload`.
 
 ## Approvals
 
 Approvals and admin operations (key generation, host edits, ...) are confirmed through your operating system's authentication dialog, opened by the daemon itself:
 
-- **Linux:** polkit (password prompt). Run `sudo agentssh install-polkit` once, then `systemctl --user restart agentssh`.
-- **macOS:** Touch ID, or your macOS password.
-- **Windows:** your Windows password.
+- **Linux (on by default):** polkit (password prompt). Run `sudo agentssh install-polkit` once from your own account, then `systemctl --user restart agentssh`. It needs a local graphical session (a forwarded X display does not count).
+- **macOS (off by default):** Touch ID, or your macOS password.
+- **Windows (off by default):** your Windows password.
+
+On macOS and Windows the daemon uses codes until these backends have been verified on real machines. To try OS authentication there, set `AGENTSSH_OS_AUTH=1` in the daemon's environment. `AGENTSSH_OS_AUTH=0` forces codes on every OS.
 
 When the agent runs something destructive:
 
@@ -150,9 +152,9 @@ When the agent runs something destructive:
    - `n`: deny
    - `m`: deny with a message that is passed back to the agent
 
-   For `y`, `s` and `m` the OS dialog appears and shows the command; cancelling it leaves the request pending. Denials (`n`) need no authentication.
+   For `y`, `s` and `m` the OS dialog appears and shows the request number, host and command (and your message for `m`); cancelling it leaves the request pending. Denials (`n`) need no authentication. Only one dialog is open at a time.
 
-**Fallback:** without OS authentication (no graphical session, polkit action not installed), codes remain: the notification carries a code that you type after choosing. Three wrong codes deny the request. `agentssh doctor` shows which mode is active.
+**Fallback: codes.** Without OS authentication (turned off, no local graphical session, polkit action missing or installed for another user), the notification carries a 4-character code that you type after choosing. Three wrong codes deny the request. If the OS dialog fails to appear (for example, the polkit agent is gone), the daemon switches to codes until it restarts and sends a code for every pending request; `approve` asks you to choose again and enter it, and an admin command asks you to run it again. `agentssh doctor` shows which mode is active.
 
 ## Threat model — read this
 
@@ -163,7 +165,9 @@ When the agent runs something destructive:
 
   It does **not** protect against a malicious process running as your user that attacks deliberately. Such a process can read the OS keyring, debug the daemon, or read your screen.
 - **Hardened mode (planned for V1.1):** the daemon runs as a separate system user, so agents cannot read the vault, the config or the daemon's memory. This is a real security boundary.
-- Approvals and admin operations are confirmed through the operating system's authentication dialog, triggered by the daemon itself; a caller of the daemon (including an agent) cannot complete them without the human passing that dialog. Without OS authentication (no graphical session, polkit action not installed), agentssh falls back to codes from desktop notifications, which a same-user process could read; `agentssh doctor` shows which mode is active.
+- Approvals and admin operations are confirmed through the operating system's authentication dialog, triggered by the daemon itself; a caller of the daemon (including an agent) cannot complete them without the human passing that dialog. **Authenticate only dialogs you started yourself**, and check that the request number and command match what `approve` shows: an agent can start a dialog too, and authenticating it approves what it names.
+- Without OS authentication, agentssh falls back to codes from desktop notifications, which a same-user process could read. In code mode, when a notification cannot be sent, the code is shown in the terminal and is also exposed to any process of your user that calls the daemon's socket. `agentssh doctor` shows which mode is active.
+- Locking a keyring-mode vault (`agentssh lock`) is not a security boundary against processes of your user: they can read the master key from the OS keyring themselves.
 - **Agent hooks are a soft layer.** They deny direct `ssh`/`scp`/`rsync`, deny human-only `agentssh` subcommands, and keep agents out of agentssh's own files. In Claude Code they also ask you before `mutate` commands. The daemon enforces forbidden commands, profiles and approvals whether or not a hook is installed.
 - **The agent name is self-reported.** The CLI derives it from environment variables such as `CLAUDECODE`, `CODEX_*` and `GEMINI_CLI`, so a caller can claim to be Claude Code. That only affects whether a `mutate` command on a `standard` host gets an in-chat ask or an out-of-band approval. It never bypasses forbidden commands or destructive approvals.
 - **Classification is best-effort static analysis.** It handles quoting, escapes, wrappers, nested shells, globs on sensitive paths and dynamic command names; dynamic or unknown constructs are classified upward. Interpreters such as `python -c` count as plain `mutate`.
@@ -172,7 +176,7 @@ When the agent runs something destructive:
 
 - Needs Windows 10 1803 or later (AF_UNIX sockets). The daemon only accepts connections from processes running as the same Windows user; it checks the peer's token SID.
 - `agentssh init` registers a logon task (`schtasks`) that starts `agentssh daemon --detach` with no console window. The master key goes into Windows Credential Manager.
-- Approval codes arrive as toast notifications sent through Windows PowerShell. Admin commands read from the console (`CONIN$`).
+- OS authentication is off by default on Windows (see [Approvals](#approvals)); in code mode the codes arrive as toast notifications sent through Windows PowerShell. Admin commands read from the console (`CONIN$`).
 - Claude Code on Windows runs Bash through Git Bash. The hook also recognizes `ssh.exe`, `C:\` paths and the `%APPDATA%` directories.
 - Config lives in `%APPDATA%\agentssh`. State, logs and the socket live in `%LOCALAPPDATA%\agentssh`. Both are protected by the per-user ACL of your profile.
 
