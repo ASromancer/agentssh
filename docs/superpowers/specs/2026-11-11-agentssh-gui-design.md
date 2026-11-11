@@ -46,7 +46,7 @@ Ngoài phạm vi:
 | Package | Trách nhiệm |
 |---|---|
 | `internal/humanok` | `Confirm(ctx, msg string) error`: bật hộp xác thực HĐH, trả `nil` khi người dùng xác thực thành công. Mỗi OS một file, có thêm bản giả chỉ dùng cho test. |
-| `internal/ui` | HTTP server: token/cookie, kiểm tra Host/Origin, API JSON, SSE `/events`, file tĩnh nhúng bằng `embed` (HTML + CSS + JS thuần, không dùng framework). |
+| `internal/ui` | HTTP server: nonce đăng nhập/cookie, kiểm tra Host/Origin, API JSON, SSE `/events`, file tĩnh nhúng bằng `embed` (HTML + CSS + JS thuần, không dùng framework). |
 | `internal/tray` | Icon khay, số yêu cầu chờ, menu. Tự tắt khi không có phiên đồ họa. |
 
 Mọi API của UI gọi lại đúng các hàm daemon đang dùng cho RPC (Decide, Admin, Unlock, Lock, Keys, Hosts, Pending, Status). Tầng cứng không đổi: policy, profile, forbidden và known_hosts vẫn y như cũ.
@@ -128,14 +128,15 @@ Khi đó daemon quay về cơ chế mã 4 ký tự gửi qua thông báo desktop
 ## 5. Bảo mật web UI
 
 - **Địa chỉ:** lắng nghe trên `127.0.0.1:0` (cổng ngẫu nhiên). Cổng cố định chỉnh được bằng `agentssh daemon --ui-port`.
-- **Token:** mỗi lần khởi động, daemon sinh 32 byte ngẫu nhiên. URL `http://127.0.0.1:<port>/?t=<token>` được ghi vào `<state>/ui.url` với quyền 600.
-- **Lần mở đầu:** `GET /?t=<token>` đặt cookie `agentssh` (HttpOnly, SameSite=Strict, Path=/) rồi chuyển hướng 303 về `/` để token không nằm lại trong lịch sử. Request nào không có cookie hợp lệ đều nhận 401.
+- **Chỉ loopback:** UI chỉ lắng nghe trên `127.0.0.1`.
+- **Nonce đăng nhập dùng một lần:** không có URL cố định và không có file `ui.url`. Mỗi lần cần mở UI, daemon sinh một nonce ngẫu nhiên, dùng được đúng một lần, hết hạn sau 10 phút. Nonce lấy qua icon khay, liên kết trong thông báo, hoặc `agentssh ui` (RPC `UILogin` trên unix socket, daemon kiểm tra uid của người gọi).
+- **Lần mở đầu:** `GET /?n=<nonce>` đổi nonce lấy cookie phiên `agentssh` riêng cho lần đăng nhập đó (HttpOnly, SameSite=Strict, Path=/), rồi chuyển hướng 303 về `/` để nonce không nằm lại trong lịch sử. Phiên hết hạn sau 8 giờ không dùng. Request nào không có cookie hợp lệ đều nhận 401.
 - **Host header:** phải đúng `127.0.0.1:<port>` hoặc `localhost:<port>`, nếu không thì trả 421. Việc này chống DNS rebinding.
 - **POST/PUT/DELETE:** `Origin` phải trùng với origin của UI. Body là JSON, `Content-Type: application/json`. Việc này chống CSRF.
 - **Header phản hồi:** `Content-Security-Policy: default-src 'self'`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`.
 - **Không có bí mật nào đi qua UI.** UI chỉ hiện public key và fingerprint. Passphrase nhập để mở khóa vault chỉ đi qua loopback và không được lưu.
 - **Dữ liệu chỉ đọc** (audit, host, output, yêu cầu chờ): agent vốn đọc được các file này, nên lộ qua UI không thêm rủi ro. Mọi thao tác thay đổi đều qua mục 4.
-- **`ui.url` không phải bí mật đối với agent.** Token chỉ chặn user khác trên cùng máy và các trang web lạ.
+- **Agent cùng user vẫn lấy được liên kết đăng nhập** (qua `agentssh ui --print`), như nó làm được mọi việc khác của user. Nonce chỉ chặn user khác trên cùng máy và các trang web lạ.
 
 ## 6. Màn hình
 
@@ -175,7 +176,7 @@ Một trang duy nhất có 4 tab, cập nhật trực tiếp qua `GET /events` (
 ### 7.1 Icon khay
 
 - Icon cùng số yêu cầu chờ. Tooltip ví dụ "agentssh: 2 yêu cầu chờ duyệt".
-- Menu: **Mở agentssh** (mở `ui.url` bằng `xdg-open` / `open` / `rundll32 url.dll`), **Khóa vault**, **Ẩn icon** (cho tới lần khởi động sau).
+- Menu: **Mở agentssh** (xin một liên kết đăng nhập mới rồi mở bằng `xdg-open` / `open` / `rundll32 url.dll`), **Khóa vault**, **Ẩn icon** (cho tới lần khởi động sau).
 - Linux GNOME cần extension AppIndicator; Ubuntu cài sẵn, các bản khác thì `doctor` báo nếu thiếu.
 - `agentssh daemon --no-tray` tắt icon. Không có phiên đồ họa thì icon tự tắt.
 
@@ -183,8 +184,8 @@ Một trang duy nhất có 4 tab, cập nhật trực tiếp qua `GET /events` (
 
 | OS | Cách làm |
 |---|---|
-| Linux | `notify-send -A open=Mở --wait …` chạy trong goroutine; nếu nhận `open` thì mở `ui.url#req=<id>`. |
-| Windows | Toast có `activationType="protocol"` và `launch="<ui.url>#req=<id>"`. |
+| Linux | `notify-send -A open=Mở --wait …` chạy trong goroutine; nếu nhận `open` thì mở liên kết đăng nhập một lần kèm `#req=<id>`. |
+| Windows | Toast có `activationType="protocol"` và `launch="<liên kết đăng nhập một lần>#req=<id>"`. |
 | macOS | `osascript` không hỗ trợ bấm; dùng icon khay. |
 
 Khi xác thực HĐH đang hoạt động, nội dung thông báo không còn mã duyệt, ví dụ: "VMT_DWH: rm -rf /var/log/old [destructive], bấm để duyệt".
@@ -194,7 +195,7 @@ Khi xác thực HĐH đang hoạt động, nội dung thông báo không còn m�
 - `agentssh approve`: khi `humanok.Available()`, lệnh không hỏi mã nữa. Chọn `y`/`s` sẽ bật hộp xác thực HĐH. Ngược lại vẫn hỏi mã như cũ.
 - Các lệnh quản trị trên CLI (`host`, `key`, `reload`, `trust`) cũng chuyển sang xác thực HĐH theo cùng quy tắc. Chúng vẫn bắt chạy trên terminal thật.
 - `agentssh daemon` thêm cờ `--no-ui`, `--no-tray`, `--ui-port N`.
-- Lệnh mới `agentssh ui` mở trình duyệt vào `ui.url`.
+- Lệnh mới `agentssh ui` xin một liên kết đăng nhập một lần và mở trình duyệt vào đó (`--print` chỉ in ra).
 - Lệnh mới `sudo agentssh install-polkit` cài file `/usr/share/polkit-1/actions/dev.agentssh.policy`.
 - `doctor` kiểm tra thêm: chế độ xác thực, polkit action, UI đang lắng nghe, icon khay.
 - Audit: trường `code_ok` vẫn giữ; thêm `auth: "os"|"code"|"passphrase"`.
@@ -202,13 +203,13 @@ Khi xác thực HĐH đang hoạt động, nội dung thông báo không còn m�
 ## 9. Kiểm thử
 
 - `internal/ui` test bằng `httptest`:
-  - token đổi thành cookie, thiếu cookie bị 401;
+  - nonce đổi thành cookie phiên (dùng lại bị từ chối), thiếu cookie bị 401;
   - Host sai bị 421;
   - Origin sai bị 403;
   - từng endpoint với `humanok` giả (luôn chấp nhận / luôn từ chối);
   - SSE gửi sự kiện khi có yêu cầu mới.
 - `internal/humanok`: test interface và đường dự phòng (`Available()` false thì dùng mã). Hộp thoại thật của HĐH không tự động hóa được.
-- E2E (`scripts/e2e.py`): build với tag `e2efake`, để `humanok` đọc quyết định từ file do test ghi. Kịch bản: duyệt qua API của UI, các thao tác host/key qua UI, kiểm tra token/Host/Origin trên binary thật. Bản phát hành không bao giờ có tag này.
+- E2E (`scripts/e2e.py`): build với tag `e2efake`, để `humanok` đọc quyết định từ file do test ghi. Kịch bản: duyệt qua API của UI, các thao tác host/key qua UI, kiểm tra nonce/Host/Origin trên binary thật. Bản phát hành không bao giờ có tag này.
 - CI: unit test trên 3 OS như hiện nay; thêm một bước build macOS với cgo.
 - Checklist test tay cho từng OS, chạy trước mỗi lần phát hành:
   - hộp xác thực hiện đúng lời nhắn;
@@ -227,7 +228,7 @@ Khi xác thực HĐH đang hoạt động, nội dung thông báo không còn m�
 5. `internal/tray` và thông báo bấm được.
 6. `doctor`, README (mô hình đe dọa cập nhật theo mục 4), CI macOS cgo, phát hành v0.2.0.
 
-## §9 Amendments (2026-11-11)
+## 11. Amendments (2026-11-11)
 
-- Token trong URL (§5) được thay bằng nonce đăng nhập dùng một lần (hạn 10 phút). `agentssh ui` xin nonce từ daemon qua unix socket; không còn file `ui.url`. Session hết hạn sau 8 giờ không dùng.
+- Token trong URL (§5, §7, §8) đã được thay bằng nonce đăng nhập dùng một lần (hạn 10 phút). `agentssh ui` xin nonce từ daemon qua unix socket; không còn file `ui.url`. Session hết hạn sau 8 giờ không dùng.
 - Hoãn lại, chưa làm: đếm ngược thời gian chờ duyệt; trạng thái "host key đã đổi" ở màn Host; lọc nhật ký theo khoảng ngày (chỉ có `since`); số yêu cầu chờ trên chính icon khay (hiện chỉ ở tooltip); kiểm tra tray/AppIndicator trong `doctor`.
