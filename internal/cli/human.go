@@ -595,7 +595,7 @@ func cmdDoctor(args []string) int {
 		}
 	}
 
-	if err := approval.Notify("agentssh doctor", "test notification"); err != nil {
+	if err := approval.Notify(approval.Notice{Title: "agentssh doctor", Body: "test notification"}); err != nil {
 		warn("desktop notifications do not work (" + err.Error() + "): approval codes will be shown in the terminal, " +
 			"so an agent that can fake a TTY could approve itself; prefer hardened mode on this machine")
 	} else {

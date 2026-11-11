@@ -8,9 +8,9 @@ import (
 	"os"
 )
 
-// Notify appends "title\tbody" to $AGENTSSH_E2E_NOTES, where the e2e test
+// Notify appends "title\tbody\tlink" to $AGENTSSH_E2E_NOTES, where the e2e test
 // reads the codes. Test builds only, never in releases.
-func Notify(title, body string) error {
+func Notify(n Notice) error {
 	p := os.Getenv("AGENTSSH_E2E_NOTES")
 	if p == "" {
 		return errors.New("AGENTSSH_E2E_NOTES is not set")
@@ -20,6 +20,6 @@ func Notify(title, body string) error {
 		return err
 	}
 	defer f.Close()
-	_, err = fmt.Fprintf(f, "%s\t%s\n", title, body)
+	_, err = fmt.Fprintf(f, "%s\t%s\t%s\n", n.Title, n.Body, n.Link)
 	return err
 }

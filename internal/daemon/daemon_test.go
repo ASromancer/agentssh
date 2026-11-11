@@ -127,10 +127,10 @@ type harness struct {
 	remote string
 }
 
-func (h *harness) notify(_, body string) error {
+func (h *harness) notify(n approval.Notice) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.notes = append(h.notes, body)
+	h.notes = append(h.notes, n.Body)
 	return nil
 }
 

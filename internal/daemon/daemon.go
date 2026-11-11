@@ -55,7 +55,7 @@ type Daemon struct {
 	log    *audit.Log
 }
 
-func New(notify func(title, body string) error, approvalTimeout time.Duration) (*Daemon, error) {
+func New(notify func(approval.Notice) error, approvalTimeout time.Duration) (*Daemon, error) {
 	for _, d := range []string{paths.Config(), paths.State(), paths.Out(), filepath.Dir(paths.Socket())} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return nil, err
@@ -365,3 +365,7 @@ func checkPeer(c net.Conn) error {
 	}
 	return cerr
 }
+
+// SetNotifyLink makes approval notifications open f(id) when clicked.
+// Call it before Serve.
+func (d *Daemon) SetNotifyLink(f func(id int) string) { d.q.Link = f }
