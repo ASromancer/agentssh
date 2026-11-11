@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,13 +44,10 @@ func cmdDaemon(args []string) int {
 	}
 	*noTray = *noTray || os.Getenv("AGENTSSH_NO_TRAY") == "1"
 	if *detach {
-		if err := startDetached(filepath.Join(paths.State(), "daemon.log")); err != nil {
+		if err := startDetached(filepath.Join(paths.State(), "daemon.log"), detachArgs(*noUI, *noTray, *uiPort)); err != nil {
 			return errf(1, "%v", err)
 		}
 		return 0
-	}
-	if daemon.Running() {
-		return errf(1, "daemon already running on %s", paths.Socket())
 	}
 	if *logFile != "" {
 		os.MkdirAll(filepath.Dir(*logFile), 0o700)
@@ -63,29 +61,34 @@ func cmdDaemon(args []string) int {
 	if err != nil {
 		return errf(1, "%v", err)
 	}
+	ln, err := d.Listen() // bind (and refuse a second daemon) before the UI starts
+	if err != nil {
+		return errf(1, "%v", err)
+	}
 	svc := d.Service()
 	var srv *ui.Server
 	if !*noUI {
 		srv, err = ui.Start(ui.Options{
 			Backend: ui.ServiceBackend{S: svc}, Port: *uiPort, Version: Version,
-			URLFile: filepath.Join(paths.State(), "ui.url"), AuditFile: paths.Audit(),
-			Doctor: func() []ui.Check { return doctorChecks(false) },
+			AuditFile: paths.Audit(),
+			Doctor:    func() []ui.Check { return doctorChecks(false) },
 		})
 		if err != nil {
 			log.Printf("ui: %v (continuing without the UI)", err)
 			srv = nil
 		} else {
 			defer srv.Close()
+			d.SetUI(srv.Base(), srv.LoginURL)
 			d.SetNotifyLink(srv.Link)
-			log.Printf("ui on %s", strings.SplitN(srv.URL(), "?", 2)[0])
+			log.Printf("ui on %s", srv.Base())
 		}
 	}
 	served := make(chan error, 1)
 	stop := make(chan struct{})
-	go func() { served <- d.Serve(); close(stop) }()
+	go func() { served <- d.Serve(ln); close(stop) }()
 	if !*noTray && srv != nil && tray.Supported() {
 		tray.Run(tray.Options{
-			URL: srv.URL(), Open: approval.OpenURL,
+			Login: srv.LoginURL, Open: approval.OpenURL,
 			Lock: func() error { return svc.Lock(&daemon.Empty{}, &daemon.Empty{}) },
 			Pending: func() int {
 				var p []approval.Request
@@ -101,14 +104,43 @@ func cmdDaemon(args []string) int {
 	return 0
 }
 
-func cmdUI(args []string) int {
-	b, err := os.ReadFile(filepath.Join(paths.State(), "ui.url"))
-	u := strings.TrimSpace(string(b))
-	if err != nil || u == "" {
-		return errf(1, "the agentssh UI is not running (is the daemon up? started with --no-ui?)")
+// detachArgs are the flags a --detach child must inherit.
+func detachArgs(noUI, noTray bool, uiPort int) []string {
+	var a []string
+	if noUI {
+		a = append(a, "--no-ui")
 	}
-	if err := approval.OpenURL(u); err != nil {
-		fmt.Println("open this address in your browser:", u)
+	if noTray {
+		a = append(a, "--no-tray")
+	}
+	if uiPort != 0 {
+		a = append(a, "--ui-port", strconv.Itoa(uiPort))
+	}
+	return a
+}
+
+// cmdUI asks the daemon for a one-time login link and opens it.
+func cmdUI(args []string) int {
+	fs := newFlags("ui")
+	print := fs.Bool("print", false, "print the login URL instead of opening it")
+	if _, err := parse(fs, args); err != nil {
+		return 2
+	}
+	c, code := dial()
+	if c == nil {
+		return code
+	}
+	defer c.Close()
+	var r daemon.UILoginReply
+	if err := c.Call("A.UILogin", &daemon.Empty{}, &r); err != nil {
+		return errf(1, "%v (daemon started with --no-ui?)", err)
+	}
+	if *print {
+		fmt.Println(r.URL)
+		return 0
+	}
+	if err := approval.OpenURL(r.URL); err != nil {
+		fmt.Println("open this address in your browser (single use):", r.URL)
 	}
 	return 0
 }
@@ -608,10 +640,10 @@ func doctorChecks(notify bool) []ui.Check {
 	ok := func(s string) { out = append(out, ui.Check{OK: true, Text: s}) }
 	warn := func(s string) { out = append(out, ui.Check{OK: false, Text: s}) }
 
+	var st daemon.StatusReply
 	if c, err := daemon.Dial(); err != nil {
 		warn("daemon is not running (systemctl --user start agentssh, or agentssh daemon --detach)")
 	} else {
-		var st daemon.StatusReply
 		if err := c.Call("A.Status", &daemon.Empty{}, &st); err != nil {
 			warn("daemon status: " + err.Error())
 		} else {
@@ -636,8 +668,8 @@ func doctorChecks(notify bool) []ui.Check {
 		c.Close()
 	}
 
-	if b, err := os.ReadFile(filepath.Join(paths.State(), "ui.url")); err == nil && len(b) > 0 {
-		ok("UI is running (agentssh ui)")
+	if st.UI != "" {
+		ok("UI on " + st.UI)
 	} else {
 		warn("UI is not running (daemon started with --no-ui, or an older daemon)")
 	}

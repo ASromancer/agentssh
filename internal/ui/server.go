@@ -1,5 +1,5 @@
 // Package ui is agentssh's local web interface: approvals, hosts, vault and
-// keys, log and status. It listens on 127.0.0.1 only. A per-start token is
+// keys, log and status. It listens on 127.0.0.1 only. A single-use login nonce is
 // exchanged for an HttpOnly cookie, and Host and Origin are checked so
 // other web pages and other local users cannot drive it. Every change still
 // goes through the daemon, which asks the OS to authenticate the human.
@@ -7,14 +7,12 @@ package ui
 
 import (
 	"crypto/rand"
-	"crypto/subtle"
 	"embed"
 	"encoding/hex"
 	"io/fs"
 	"mime"
 	"net"
 	"net/http"
-	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -31,24 +29,30 @@ type Check struct {
 type Options struct {
 	Backend   Backend
 	Port      int            // 0 = random
-	URLFile   string         // written with the tokenized URL (mode 0600), removed on Close
 	Doctor    func() []Check // status checks shown in the UI
 	Version   string
 	AuditFile string // audit.jsonl to read for the log tab
 }
 
 type Server struct {
-	opt   Options
-	token string
-	port  int
-	srv   *http.Server
+	opt  Options
+	port int
+	srv  *http.Server
+	now  func() time.Time // injectable for tests
 
 	mu       sync.Mutex
-	sessions map[string]bool // cookie values handed out on login; the URL token is never a cookie
+	nonces   map[string]time.Time // one-time login nonce -> expiry
+	sessions map[string]time.Time // cookie value -> last seen
 }
 
-func newServer(o Options, token string, port int) *Server {
-	return &Server{opt: o, token: token, port: port, sessions: map[string]bool{}}
+const (
+	nonceTTL    = 10 * time.Minute
+	sessionIdle = 8 * time.Hour
+	maxEntries  = 64
+)
+
+func newServer(o Options, port int) *Server {
+	return &Server{opt: o, port: port, now: time.Now, nonces: map[string]time.Time{}, sessions: map[string]time.Time{}}
 }
 
 // Start listens on 127.0.0.1 and serves in the background.
@@ -57,66 +61,118 @@ func Start(o Options) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		ln.Close()
-		return nil, err
-	}
-	s := newServer(o, hex.EncodeToString(b), ln.Addr().(*net.TCPAddr).Port)
+	s := newServer(o, ln.Addr().(*net.TCPAddr).Port)
 	s.srv = &http.Server{Handler: s.handler(), ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout: 120 * time.Second, MaxHeaderBytes: 64 << 10}
-	if o.URLFile != "" {
-		if err := writeURLFile(o.URLFile, s.URL()+"\n"); err != nil {
-			ln.Close()
-			return nil, err
-		}
-	}
 	go s.srv.Serve(ln)
 	return s, nil
 }
 
-// writeURLFile replaces any existing file: WriteFile would keep its old mode.
-func writeURLFile(path, content string) error {
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	if _, err := f.WriteString(content); err != nil {
-		f.Close()
-		return err
-	}
-	return f.Close()
-}
-
 func (s *Server) hostport(h string) string { return h + ":" + strconv.Itoa(s.port) }
 
-// URL is the address that logs a browser in (it carries the token).
-func (s *Server) URL() string { return "http://" + s.hostport("127.0.0.1") + "/?t=" + s.token }
+// Base is the UI address without any secret.
+func (s *Server) Base() string { return "http://" + s.hostport("127.0.0.1") + "/" }
 
-// Link opens the page on one approval request.
-func (s *Server) Link(id int) string { return s.URL() + "#req=" + strconv.Itoa(id) }
+func randHex() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// LoginURL mints a single-use login link valid for 10 minutes.
+func (s *Server) LoginURL() string {
+	n, err := randHex()
+	if err != nil {
+		return s.Base() // no nonce: the page answers 401 rather than leaking anything
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	if len(s.nonces) >= maxEntries {
+		for k, exp := range s.nonces {
+			if !exp.After(now) {
+				delete(s.nonces, k)
+			}
+		}
+	}
+	for len(s.nonces) >= maxEntries { // still full: drop the oldest
+		oldest, ot := "", time.Time{}
+		for k, exp := range s.nonces {
+			if oldest == "" || exp.Before(ot) {
+				oldest, ot = k, exp
+			}
+		}
+		delete(s.nonces, oldest)
+	}
+	s.nonces[n] = now.Add(nonceTTL)
+	return s.Base() + "?n=" + n
+}
+
+// Link opens the page on one approval request (mints a fresh nonce).
+func (s *Server) Link(id int) string { return s.LoginURL() + "#req=" + strconv.Itoa(id) }
 
 func (s *Server) Close() error {
-	if s.opt.URLFile != "" {
-		os.Remove(s.opt.URLFile)
-	}
 	if s.srv == nil {
 		return nil
 	}
 	return s.srv.Close()
 }
 
-func (s *Server) tokenOK(v string) bool {
-	return len(v) == len(s.token) && subtle.ConstantTimeCompare([]byte(v), []byte(s.token)) == 1
+// useNonce consumes a login nonce; it is valid once and until it expires.
+func (s *Server) useNonce(v string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	exp, ok := s.nonces[v]
+	delete(s.nonces, v)
+	return ok && exp.After(s.now())
 }
 
+// newSession registers a cookie value; at the cap it drops idle ones, then the stalest.
+func (s *Server) newSession() (string, error) {
+	sid, err := randHex()
+	if err != nil {
+		return "", err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	if len(s.sessions) >= maxEntries {
+		for k, t := range s.sessions {
+			if now.Sub(t) > sessionIdle {
+				delete(s.sessions, k)
+			}
+		}
+	}
+	for len(s.sessions) >= maxEntries {
+		oldest, ot := "", time.Time{}
+		for k, t := range s.sessions {
+			if oldest == "" || t.Before(ot) {
+				oldest, ot = k, t
+			}
+		}
+		delete(s.sessions, oldest)
+	}
+	s.sessions[sid] = now
+	return sid, nil
+}
+
+// session checks a cookie and refreshes its last-seen time.
 func (s *Server) session(v string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.sessions[v]
+	t, ok := s.sessions[v]
+	if !ok {
+		return false
+	}
+	now := s.now()
+	if now.Sub(t) > sessionIdle {
+		delete(s.sessions, v)
+		return false
+	}
+	s.sessions[v] = now
+	return true
 }
 
 func (s *Server) handler() http.Handler {
@@ -157,24 +213,16 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			http.Error(w, "wrong host", http.StatusMisdirectedRequest)
 			return
 		}
-		if r.Method == http.MethodGet && r.URL.Path == "/" && r.URL.Query().Has("t") {
-			if !s.tokenOK(r.URL.Query().Get("t")) {
+		if r.Method == http.MethodGet && r.URL.Path == "/" && r.URL.Query().Has("n") {
+			if !s.useNonce(r.URL.Query().Get("n")) {
 				http.Error(w, "this link is no longer valid; open agentssh from 'agentssh ui' or the tray icon", http.StatusUnauthorized)
 				return
 			}
-			b := make([]byte, 32)
-			if _, err := rand.Read(b); err != nil {
+			sid, err := s.newSession()
+			if err != nil {
 				http.Error(w, "internal error", http.StatusInternalServerError)
 				return
 			}
-			sid := hex.EncodeToString(b)
-			s.mu.Lock()
-			if len(s.sessions) >= 64 {
-				// ponytail: cap of 64; older logins beyond that just re-login
-				s.sessions = map[string]bool{}
-			}
-			s.sessions[sid] = true
-			s.mu.Unlock()
 			http.SetCookie(w, &http.Cookie{Name: "agentssh", Value: sid, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return

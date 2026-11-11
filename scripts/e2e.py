@@ -38,10 +38,11 @@ class UI:
     """Talks to the daemon's web UI like a browser would."""
 
     def __init__(self):
-        url = open(os.path.join(HOME, ".local", "state", "agentssh", "ui.url")).read().strip()
-        u = urllib.parse.urlsplit(url)
+        rc, out, err = run("ui", "--print")
+        assert rc == 0, err
+        self.url = out.strip()  # one-time login link from the daemon
+        u = urllib.parse.urlsplit(self.url)
         self.host, self.port = u.hostname, u.port
-        self.token = urllib.parse.parse_qs(u.query)["t"][0]
         self.cookie = None
 
     def req(self, method, path, body=None, host=None, origin="same", cookie=True, ctype="application/json"):
@@ -61,8 +62,12 @@ class UI:
         r = c.getresponse()
         return r.status, r.getheader("Set-Cookie"), r.read().decode()
 
+    def loginpath(self):
+        u = urllib.parse.urlsplit(self.url)
+        return u.path + "?" + u.query
+
     def login(self):
-        status, setc, _ = self.req("GET", f"/?t={self.token}", cookie=False)
+        status, setc, _ = self.req("GET", self.loginpath(), cookie=False)
         self.cookie = setc.split(";")[0] if setc else None
         return status
 
@@ -472,7 +477,9 @@ def main():
         rc, out, _ = run("doctor")
         check("approvals use OS authentication" in out, "doctor reports OS authentication", out)
         ui = UI()
-        check(ui.login() == 303 and ui.cookie and ui.cookie.startswith("agentssh="), "UI login exchanges the token for a cookie")
+        check(ui.login() == 303 and ui.cookie and ui.cookie.startswith("agentssh="), "UI login exchanges the nonce for a cookie")
+        check(ui.req("GET", ui.loginpath(), cookie=False)[0] == 401, "a login link works only once")
+        check(not os.path.exists(os.path.join(HOME, ".local", "state", "agentssh", "ui.url")), "no ui.url file is written")
         check(ui.req("GET", "/api/pending", cookie=False)[0] == 401, "UI refuses requests without the cookie")
         check(ui.req("GET", "/api/pending", host="evil.example")[0] == 421, "UI refuses a foreign Host header")
         check(ui.req("POST", "/api/lock", origin="http://evil.example")[0] == 403, "UI refuses a cross-origin POST")
@@ -499,6 +506,22 @@ def main():
         notes = open(NOTES).read()
         check(f"#req={rid}" in notes, "approval notification links to the UI request", notes[-300:])
         open(gate, "w").write("deny")
+        victimd = os.path.join(remote, "victimd")
+        open(victimd, "w").write("x")
+        agent = subprocess.Popen([BIN, "run", "e2e", f"rm {victimd}"], env=ENV, stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        rid = None
+        for _ in range(50):
+            pend = json.loads(ui.req("GET", "/api/pending")[2])
+            if pend:
+                rid = pend[0]["id"]
+                break
+            time.sleep(0.2)
+        st, _, body = ui.req("POST", "/api/decide", {"id": rid, "choice": "y"})
+        check(st == 400 and os.path.exists(victimd), "UI approve is refused when the OS dialog denies", body)
+        st, _, body = ui.req("POST", "/api/decide", {"id": rid, "choice": "n"})
+        out, err = agent.communicate(timeout=30)
+        check(st == 200 and agent.returncode == 101 and os.path.exists(victimd), "UI deny needs no authentication", body + out + err)
         victim4 = os.path.join(remote, "victim4")
         open(victim4, "w").write("x")
         agent = subprocess.Popen([BIN, "run", "e2e", f"rm {victim4}"], env=ENV, stdin=subprocess.DEVNULL,

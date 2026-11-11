@@ -3,17 +3,13 @@ package ui
 import (
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
-const testTok = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-
 func testServer() *Server {
-	return newServer(Options{Backend: &fakeBackend{}}, testTok, 8123)
+	return newServer(Options{Backend: &fakeBackend{}}, 8123)
 }
 
 func do(t *testing.T, s *Server, method, target, host, origin, cookie, ctype, body string) *httptest.ResponseRecorder {
@@ -34,10 +30,13 @@ func do(t *testing.T, s *Server, method, target, host, origin, cookie, ctype, bo
 	return w
 }
 
-// login performs the token exchange and returns the session cookie value.
+// loginPath mints a nonce and returns its request path.
+func loginPath(s *Server) string { return strings.TrimPrefix(s.LoginURL(), "http://127.0.0.1:8123") }
+
+// login performs the nonce exchange and returns the session cookie value.
 func login(t *testing.T, s *Server) string {
 	t.Helper()
-	w := do(t, s, "GET", "/?t="+testTok, "127.0.0.1:8123", "", "", "", "")
+	w := do(t, s, "GET", loginPath(s), "127.0.0.1:8123", "", "", "", "")
 	c := w.Result().Cookies()
 	if w.Code != 303 || len(c) != 1 {
 		t.Fatalf("login: %d %+v", w.Code, c)
@@ -50,15 +49,15 @@ func TestGuard(t *testing.T) {
 	const host, origin = "127.0.0.1:8123", "http://127.0.0.1:8123"
 	sess := login(t, s)
 
-	w := do(t, s, "GET", "/?t="+testTok, host, "", "", "", "")
+	w := do(t, s, "GET", loginPath(s), host, "", "", "", "")
 	if w.Code != 303 || w.Header().Get("Location") != "/" {
 		t.Fatalf("token exchange: %d %v", w.Code, w.Header())
 	}
 	c := w.Result().Cookies()
-	if len(c) != 1 || c[0].Name != "agentssh" || c[0].Value == testTok || len(c[0].Value) != 64 || !c[0].HttpOnly || c[0].SameSite != http.SameSiteStrictMode {
+	if len(c) != 1 || c[0].Name != "agentssh" || len(c[0].Value) != 64 || !c[0].HttpOnly || c[0].SameSite != http.SameSiteStrictMode {
 		t.Fatalf("cookie: %+v", c)
 	}
-	if w := do(t, s, "GET", "/?t=wrong", host, "", "", "", ""); w.Code != 401 {
+	if w := do(t, s, "GET", "/?n=wrong", host, "", "", "", ""); w.Code != 401 {
 		t.Fatalf("bad token: %d", w.Code)
 	}
 	if w := do(t, s, "GET", "/", host, "", "", "", ""); w.Code != 401 {
@@ -97,8 +96,8 @@ func TestGuard(t *testing.T) {
 	if w := do(t, s, "POST", "/api/lock", "localhost:8123", "http://localhost:8123", sess, "application/json", "{}"); w.Code != 421 {
 		t.Fatalf("post localhost: %d", w.Code)
 	}
-	if w := do(t, s, "GET", "/", host, "", testTok, "", ""); w.Code != 401 {
-		t.Fatalf("url token as cookie: %d", w.Code)
+	if n := strings.SplitN(s.LoginURL(), "?n=", 2)[1]; do(t, s, "GET", "/", host, "", n, "", "").Code != 401 {
+		t.Fatal("nonce as cookie accepted")
 	}
 	if w := do(t, s, "POST", "/api/lock", host, origin, sess, "application/json; charset=utf-8", "{}"); w.Code != 200 {
 		t.Fatalf("good post: %d", w.Code)
@@ -128,39 +127,75 @@ func TestStatic(t *testing.T) {
 	}
 }
 
-func TestURLFileMode(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "ui.url")
-	if err := os.WriteFile(p, []byte("old"), 0o644); err != nil {
-		t.Fatal(err)
+func TestLoginURL(t *testing.T) {
+	s := testServer()
+	u := s.LoginURL()
+	if !strings.HasPrefix(u, "http://127.0.0.1:8123/?n=") || len(u) != len("http://127.0.0.1:8123/?n=")+64 || u == s.LoginURL() {
+		t.Fatalf("login url %s", u)
 	}
-	if err := os.Chmod(p, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	s, err := Start(Options{Backend: &fakeBackend{}, URLFile: p})
-	if err != nil {
-		t.Fatal(err)
-	}
-	st, err := os.Stat(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if runtime.GOOS != "windows" && st.Mode().Perm() != 0o600 { // Windows uses the profile ACL
-		t.Fatalf("mode: %v", st.Mode())
-	}
-	b, _ := os.ReadFile(p)
-	if string(b) != s.URL()+"\n" {
-		t.Fatalf("content %q", b)
-	}
-	s.Close()
-	if _, err := os.Stat(p); !os.IsNotExist(err) {
-		t.Fatalf("not removed: %v", err)
+	if s.Base() != "http://127.0.0.1:8123/" || !strings.Contains(s.Link(9), "?n=") || !strings.HasSuffix(s.Link(9), "#req=9") {
+		t.Fatalf("%s %s", s.Base(), s.Link(9))
 	}
 }
 
-func TestURL(t *testing.T) {
+func TestNonceSingleUse(t *testing.T) {
 	s := testServer()
-	if s.URL() != "http://127.0.0.1:8123/?t="+testTok || s.Link(9) != s.URL()+"#req=9" {
-		t.Fatalf("%s %s", s.URL(), s.Link(9))
+	p := loginPath(s)
+	if w := do(t, s, "GET", p, "127.0.0.1:8123", "", "", "", ""); w.Code != 303 {
+		t.Fatalf("first: %d", w.Code)
+	}
+	if w := do(t, s, "GET", p, "127.0.0.1:8123", "", "", "", ""); w.Code != 401 {
+		t.Fatalf("reuse: %d", w.Code)
+	}
+}
+
+func TestNonceExpiryAndHost(t *testing.T) {
+	s := testServer()
+	now := time.Now()
+	s.now = func() time.Time { return now }
+	p := loginPath(s)
+	if w := do(t, s, "GET", p, "evil.example:8123", "", "", "", ""); w.Code != 421 {
+		t.Fatalf("bad host with valid nonce: %d", w.Code)
+	}
+	now = now.Add(nonceTTL + time.Second)
+	if w := do(t, s, "GET", p, "127.0.0.1:8123", "", "", "", ""); w.Code != 401 {
+		t.Fatalf("expired: %d", w.Code)
+	}
+	// the bad-host attempt must not have consumed it, but expiry still wins
+	now = now.Add(-nonceTTL)
+	p = loginPath(s)
+	do(t, s, "GET", p, "evil.example:8123", "", "", "", "")
+	if w := do(t, s, "GET", p, "127.0.0.1:8123", "", "", "", ""); w.Code != 303 {
+		t.Fatalf("nonce survives bad host: %d", w.Code)
+	}
+}
+
+func TestNonceCap(t *testing.T) {
+	s := testServer()
+	for i := 0; i < maxEntries+5; i++ {
+		s.LoginURL()
+	}
+	if len(s.nonces) > maxEntries {
+		t.Fatalf("nonces: %d", len(s.nonces))
+	}
+}
+
+func TestSessionIdleExpiry(t *testing.T) {
+	s := testServer()
+	now := time.Now()
+	s.now = func() time.Time { return now }
+	sess := login(t, s)
+	now = now.Add(7 * time.Hour)
+	if w := do(t, s, "GET", "/", "127.0.0.1:8123", "", sess, "", ""); w.Code != 200 { // refreshes last-seen
+		t.Fatalf("active: %d", w.Code)
+	}
+	now = now.Add(7 * time.Hour)
+	if w := do(t, s, "GET", "/", "127.0.0.1:8123", "", sess, "", ""); w.Code != 200 {
+		t.Fatalf("refreshed: %d", w.Code)
+	}
+	now = now.Add(8*time.Hour + time.Second)
+	if w := do(t, s, "GET", "/", "127.0.0.1:8123", "", sess, "", ""); w.Code != 401 {
+		t.Fatalf("idle: %d", w.Code)
 	}
 }
 

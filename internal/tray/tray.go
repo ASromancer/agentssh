@@ -5,6 +5,7 @@
 package tray
 
 import (
+	"log"
 	"os"
 	"runtime"
 	"strconv"
@@ -15,7 +16,7 @@ import (
 )
 
 type Options struct {
-	URL     string
+	Login   func() string // mints a one-time login URL
 	Pending func() int
 	Lock    func() error
 	Open    func(string) error
@@ -32,6 +33,12 @@ func Supported() bool {
 // Run shows the tray until done is closed. It must run on the main
 // goroutine (macOS). Hiding the icon keeps the daemon running.
 func Run(o Options, done <-chan struct{}) {
+	// An upstream panic (e.g. at shutdown on a failed D-Bus connect) must not take the daemon down.
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("tray: %v", r)
+		}
+	}()
 	var once sync.Once
 	quit := func() { once.Do(systray.Quit) }
 	systray.Run(func() {
@@ -48,7 +55,7 @@ func Run(o Options, done <-chan struct{}) {
 			for {
 				select {
 				case <-open.ClickedCh:
-					_ = o.Open(o.URL)
+					_ = o.Open(o.Login())
 				case <-lock.ClickedCh:
 					_ = o.Lock()
 				case <-hide.ClickedCh:

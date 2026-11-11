@@ -91,7 +91,10 @@ type StatusReply struct {
 	Pending                                    int
 	Auth                                       string // "os" or "code"
 	AuthNote                                   string // why OS authentication is unavailable
+	UI                                         string // base URL of the web UI, "" when it is not running
 }
+
+type UILoginReply struct{ URL string }
 
 type UnlockArgs struct{ Pass string }
 

@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -740,5 +741,27 @@ func TestRunning(t *testing.T) {
 	}()
 	if !Running() {
 		t.Fatal("not running with a listener")
+	}
+}
+
+func TestUILogin(t *testing.T) {
+	h := setup(t)
+	var lr UILoginReply
+	if err := h.call("UILogin", &Empty{}, &lr); err == nil || !strings.Contains(err.Error(), "UI is not running") {
+		t.Fatalf("unset: %v", err)
+	}
+	var st StatusReply
+	h.call("Status", &Empty{}, &st)
+	if st.UI != "" {
+		t.Fatalf("UI %q", st.UI)
+	}
+	n := 0
+	h.d.SetUI("http://127.0.0.1:1/", func() string { n++; return "http://127.0.0.1:1/?n=" + strconv.Itoa(n) })
+	if err := h.call("UILogin", &Empty{}, &lr); err != nil || lr.URL != "http://127.0.0.1:1/?n=1" {
+		t.Fatalf("login: %v %q", err, lr.URL)
+	}
+	h.call("Status", &Empty{}, &st)
+	if st.UI != "http://127.0.0.1:1/" {
+		t.Fatalf("UI %q", st.UI)
 	}
 }

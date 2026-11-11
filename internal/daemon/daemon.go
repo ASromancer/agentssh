@@ -53,6 +53,9 @@ type Daemon struct {
 	auth   atomic.Pointer[error] // why approvals use codes; nil error: OS authentication
 	pool   *sshconn.Pool
 	log    *audit.Log
+
+	uiBase  string
+	uiLogin func() string
 }
 
 func New(notify func(approval.Notice) error, approvalTimeout time.Duration) (*Daemon, error) {
@@ -299,22 +302,30 @@ func Running() bool {
 	return err == nil
 }
 
-// Serve listens on the unix socket until SIGINT/SIGTERM.
-func (d *Daemon) Serve() error {
+// Listen binds the daemon's unix socket (0600), refusing if a daemon already
+// answers on it. Bind first, then start the UI, then Serve.
+func (d *Daemon) Listen() (net.Listener, error) {
 	sock := paths.Socket()
 	if Running() {
-		return errors.New("daemon already running on " + sock)
+		return nil, errors.New("daemon already running on " + sock)
 	}
 	os.Remove(sock)
 	old := umask(0o077)
 	ln, err := net.Listen("unix", sock)
 	umask(old)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := os.Chmod(sock, 0o600); err != nil && runtime.GOOS != "windows" {
-		return err // on Windows the per-user AppData ACL protects the socket
+		ln.Close()
+		return nil, err // on Windows the per-user AppData ACL protects the socket
 	}
+	return ln, nil
+}
+
+// Serve answers RPCs on ln (from Listen) until SIGINT/SIGTERM.
+func (d *Daemon) Serve(ln net.Listener) error {
+	sock := paths.Socket()
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -328,7 +339,7 @@ func (d *Daemon) Serve() error {
 		}
 	}()
 	log.Printf("agentssh daemon listening on %s", sock)
-	err = d.ServeListener(ln)
+	err := d.ServeListener(ln)
 	os.Remove(sock)
 	d.lock()
 	if errors.Is(err, net.ErrClosed) {
@@ -377,6 +388,11 @@ func checkPeer(c net.Conn) error {
 // SetNotifyLink makes approval notifications open f(id) when clicked.
 // Call it before Serve.
 func (d *Daemon) SetNotifyLink(f func(id int) string) { d.q.Link = f }
+
+// SetUI records the UI's secret-free base URL (shown by Status) and the
+// function that mints a one-time login URL (served by the UILogin RPC).
+// Call it before Serve.
+func (d *Daemon) SetUI(base string, login func() string) { d.uiBase, d.uiLogin = base, login }
 
 // Service returns the daemon's RPC service, for in-process callers (the UI).
 func (d *Daemon) Service() *Service { return &Service{d} }

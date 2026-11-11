@@ -486,12 +486,23 @@ func (s *Service) Status(_ *Empty, r *StatusReply) error {
 	r.VaultMissing = err != nil
 	r.Passphrase = salt != nil
 	r.Pending = len(d.q.Pending())
+	r.UI = d.uiBase
 	r.Auth = "code"
 	if err := d.authProblem(); err == nil {
 		r.Auth = "os"
 	} else {
 		r.AuthNote = err.Error()
 	}
+	return nil
+}
+
+// UILogin returns a one-time login URL for the web UI. The socket is
+// uid-checked, so only the same user can mint one.
+func (s *Service) UILogin(_ *Empty, r *UILoginReply) error {
+	if s.d.uiLogin == nil {
+		return errors.New("the UI is not running")
+	}
+	r.URL = s.d.uiLogin()
 	return nil
 }
 

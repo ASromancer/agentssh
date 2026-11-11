@@ -3,7 +3,7 @@
 package tray
 
 type Options struct {
-	URL     string
+	Login   func() string
 	Pending func() int
 	Lock    func() error
 	Open    func(string) error
