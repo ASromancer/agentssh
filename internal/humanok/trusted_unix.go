@@ -9,6 +9,9 @@ import (
 	"syscall"
 )
 
+// SystemDir is the Windows System32 directory; empty elsewhere.
+func SystemDir() string { return "" }
+
 // trusted returns p with symlinks resolved, so that the caller runs the
 // file that was checked.
 func trusted(p string) (string, error) {

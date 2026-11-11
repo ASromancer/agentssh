@@ -9,7 +9,7 @@ import (
 // TrustedBinary returns the first candidate that only an administrator
 // can have put there: an absolute path to a regular file that, with every
 // parent directory, is owned by root and not writable by group or others
-// (on Windows: a file under %SystemRoot%). System helpers are never found
+// (on Windows: a file under System32). System helpers are never found
 // through PATH, which an agent can change to run its own "pkcheck".
 func TrustedBinary(candidates ...string) (string, error) {
 	err := errors.New("no candidates")

@@ -27,9 +27,8 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           command -v sshd || sudo apt-get install -y openssh-server
-          CGO_ENABLED=0 go build -o "$RUNNER_TEMP/agentssh" .
-          go build -tags e2efake -o "$RUNNER_TEMP/agentssh-fake" .
-          E2E_FAKE_BIN="$RUNNER_TEMP/agentssh-fake" python3 scripts/e2e.py "$RUNNER_TEMP/agentssh"
+          go build -tags e2efake -o "$RUNNER_TEMP/agentssh-e2e" .
+          python3 scripts/e2e.py "$RUNNER_TEMP/agentssh-e2e"
   build-unix-windows:
     needs: test
     runs-on: ubuntu-latest
@@ -44,6 +43,12 @@ jobs:
             GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath \
               -ldflags "-s -w -X github.com/ASromancer/agentssh/internal/cli.Version=${GITHUB_REF_NAME#v}" \
               -o dist/agentssh-$os-$arch$ext .
+          done
+      - name: release binaries contain no e2e test hooks
+        run: |
+          for f in dist/*; do
+            n=$(grep -a -c -e AGENTSSH_E2E_HUMANOK -e AGENTSSH_E2E_NOTES "$f" || true)
+            echo "$f: $n"; [ "$n" = 0 ]
           done
       - uses: actions/upload-artifact@v4
         with: { name: dist-other, path: dist/ }
@@ -61,6 +66,12 @@ jobs:
             CGO_ENABLED=1 GOOS=darwin GOARCH=$arch CC="clang -arch $cc_arch" go build -trimpath \
               -ldflags "-s -w -X github.com/ASromancer/agentssh/internal/cli.Version=${GITHUB_REF_NAME#v}" \
               -o dist/agentssh-darwin-$arch .
+          done
+      - name: release binaries contain no e2e test hooks
+        run: |
+          for f in dist/*; do
+            n=$(grep -a -c -e AGENTSSH_E2E_HUMANOK -e AGENTSSH_E2E_NOTES "$f" || true)
+            echo "$f: $n"; [ "$n" = 0 ]
           done
       - uses: actions/upload-artifact@v4
         with: { name: dist-macos, path: dist/ }

@@ -49,7 +49,7 @@ func cmdDaemon(args []string) int {
 		}
 		log.SetOutput(f)
 	}
-	d, err := daemon.New(approval.Desktop, approvalTimeout)
+	d, err := daemon.New(approval.Notify, approvalTimeout)
 	if err != nil {
 		return errf(1, "%v", err)
 	}
@@ -594,7 +594,7 @@ func cmdDoctor(args []string) int {
 		}
 	}
 
-	if err := approval.Desktop("agentssh doctor", "test notification"); err != nil {
+	if err := approval.Notify("agentssh doctor", "test notification"); err != nil {
 		warn("desktop notifications do not work (" + err.Error() + "): approval codes will be shown in the terminal, " +
 			"so an agent that can fake a TTY could approve itself; prefer hardened mode on this machine")
 	} else {

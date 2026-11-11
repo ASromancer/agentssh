@@ -10,11 +10,13 @@ import (
 	"math/big"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ASromancer/agentssh/internal/humanok"
 	"github.com/ASromancer/agentssh/internal/policy"
 )
 
@@ -332,21 +334,37 @@ func (q *Queue) Check(id int, op, code string) (any, error) {
 	return t.data, nil
 }
 
-// Desktop sends a desktop notification (notify-send / osascript).
+// Desktop sends a desktop notification (notify-send / osascript /
+// powershell). The helper is run only from a root-owned system path, never
+// found through PATH; without one, Desktop fails and the code is shown in
+// the terminal instead.
 func Desktop(title, body string) error {
+	var cands []string
+	switch runtime.GOOS {
+	case "linux":
+		cands = []string{"/usr/bin/notify-send", "/bin/notify-send"}
+	case "darwin":
+		cands = []string{"/usr/bin/osascript"}
+	case "windows":
+		cands = []string{filepath.Join(humanok.SystemDir(), "WindowsPowerShell", "v1.0", "powershell.exe")}
+	default:
+		return errors.New("desktop notifications not supported on " + runtime.GOOS)
+	}
+	bin, err := humanok.TrustedBinary(cands...)
+	if err != nil {
+		return err
+	}
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "linux":
-		cmd = exec.Command("notify-send", "-u", "critical", "-a", "agentssh", title, body)
+		cmd = exec.Command(bin, "-u", "critical", "-a", "agentssh", title, body)
 	case "darwin":
 		q := func(s string) string { return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"` }
-		cmd = exec.Command("osascript", "-e", "display notification "+q(body)+" with title "+q(title))
+		cmd = exec.Command(bin, "-e", "display notification "+q(body)+" with title "+q(title))
 	case "windows":
 		// Title and body go through the environment, never into the script.
-		cmd = exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", windowsToast)
+		cmd = exec.Command(bin, "-NoProfile", "-NonInteractive", "-Command", windowsToast)
 		cmd.Env = append(os.Environ(), "AGENTSSH_TITLE="+title, "AGENTSSH_BODY="+body)
-	default:
-		return errors.New("desktop notifications not supported on " + runtime.GOOS)
 	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {

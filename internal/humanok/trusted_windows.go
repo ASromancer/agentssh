@@ -6,12 +6,20 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"golang.org/x/sys/windows"
 )
 
+// SystemDir is the Windows System32 directory.
+func SystemDir() string {
+	d, _ := windows.GetSystemDirectory()
+	return d
+}
+
 func trusted(p string) (string, error) {
-	root := os.Getenv("SystemRoot")
-	if root == "" || !strings.HasPrefix(strings.ToLower(p), strings.ToLower(strings.TrimRight(root, `\`))+`\`) {
-		return "", fmt.Errorf("%s is not under %%SystemRoot%%", p)
+	root := strings.TrimRight(SystemDir(), `\`)
+	if root == "" || !strings.HasPrefix(strings.ToLower(p), strings.ToLower(root)+`\`) {
+		return "", fmt.Errorf("%s is not under %s", p, root)
 	}
 	fi, err := os.Stat(p)
 	if err != nil {
