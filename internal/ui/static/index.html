@@ -1,4 +1,112 @@
 <!doctype html>
-<html lang="vi"><head><meta charset="utf-8"><title>agentssh</title>
-<link rel="stylesheet" href="/app.css"></head>
-<body><main id="app">agentssh</main><script src="/app.js"></script></body></html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agentssh</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header>
+  <h1>agentssh</h1>
+  <span id="authmode" class="badge"></span>
+  <span id="vaultstate" class="badge"></span>
+  <span id="version" class="muted"></span>
+</header>
+<nav>
+  <button data-tab="approvals" class="tab active">Duyệt <span id="pendingcount" class="count"></span></button>
+  <button data-tab="hosts" class="tab">Host</button>
+  <button data-tab="vault" class="tab">Vault &amp; key</button>
+  <button data-tab="log" class="tab">Nhật ký &amp; trạng thái</button>
+</nav>
+<div id="flash" class="flash hidden"></div>
+<div id="configwarn" class="flash error hidden">Cấu hình trên đĩa (hosts.toml / rules.toml) đã thay đổi và chưa được duyệt: mọi yêu cầu của agent đang bị chặn. Kiểm tra lại thay đổi rồi bấm "Đọc lại cấu hình" ở tab Host.</div>
+<main>
+  <section id="approvals" class="panel">
+    <p id="noreq" class="muted">Không có yêu cầu nào đang chờ.</p>
+    <div id="reqlist"></div>
+  </section>
+
+  <section id="hosts" class="panel hidden">
+    <div class="toolbar">
+      <button id="hostadd">Thêm host</button>
+      <button id="reload">Đọc lại cấu hình (reload)</button>
+    </div>
+    <table>
+      <thead><tr><th>Tên</th><th>Địa chỉ</th><th>Profile</th><th>Agent</th><th>Key</th><th>Host key</th><th></th></tr></thead>
+      <tbody id="hostrows"></tbody>
+    </table>
+    <form id="hostform" class="card hidden">
+      <h2 id="hostformtitle">Thêm host</h2>
+      <label>Tên <input name="name" required></label>
+      <label>Địa chỉ <input name="host" required></label>
+      <label>Port <input name="port" type="number" min="1" max="65535" value="22"></label>
+      <label>User <input name="user"></label>
+      <label>Key (tên trong vault) <select name="key"></select></label>
+      <label>Profile <select name="profile"><option>readonly</option><option selected>standard</option><option>full</option></select></label>
+      <label class="check"><input name="agent" type="checkbox"> Cho agent dùng</label>
+      <label>Mô tả <input name="description"></label>
+      <label>Allow (mỗi dòng một pattern) <textarea name="allow" rows="3"></textarea></label>
+      <label>Deny (mỗi dòng một pattern) <textarea name="deny" rows="3"></textarea></label>
+      <div class="toolbar"><button type="submit">Lưu</button><button type="button" id="hostcancel">Hủy</button></div>
+    </form>
+  </section>
+
+  <section id="vault" class="panel hidden">
+    <div class="card">
+      <h2>Vault</h2>
+      <p id="vaultinfo"></p>
+      <div class="toolbar">
+        <input id="unlockpass" type="password" placeholder="Passphrase (nếu có)" autocomplete="off">
+        <button id="unlock">Mở khóa</button>
+        <button id="lock">Khóa</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Key</h2>
+      <ul id="keylist" class="plain"></ul>
+      <div class="toolbar">
+        <input id="keyname" placeholder="Tên key mới">
+        <button id="keygen">Tạo key ed25519</button>
+      </div>
+      <div class="toolbar">
+        <input id="keyfile" type="file">
+        <input id="keypass" type="password" placeholder="Passphrase của key (nếu có)" autocomplete="off">
+        <button id="keyimport">Import key</button>
+      </div>
+      <div class="toolbar">
+        <input id="pwname" placeholder="Tên mục mật khẩu">
+        <input id="pwvalue" type="password" placeholder="Mật khẩu" autocomplete="off">
+        <button id="pwimport">Lưu mật khẩu</button>
+      </div>
+      <pre id="pubkey" class="hidden"></pre>
+      <button id="pubcopy" class="hidden">Copy public key</button>
+    </div>
+  </section>
+
+  <section id="log" class="panel hidden">
+    <div class="card"><h2>Trạng thái</h2><ul id="checks" class="plain"></ul></div>
+    <div class="card">
+      <h2>Nhật ký</h2>
+      <div class="toolbar">
+        <input id="fhost" placeholder="Host">
+        <select id="fdecision"><option value="">Mọi quyết định</option><option>allow</option><option>approved</option><option>denied</option><option>forbidden</option><option>blocked</option><option>timeout</option><option>error</option></select>
+        <input id="fsince" type="date">
+        <button id="ffilter">Lọc</button>
+      </div>
+      <table>
+        <thead><tr><th>Thời gian</th><th>#</th><th>Host</th><th>Mức</th><th>Quyết định</th><th>Exit</th><th>Lệnh</th></tr></thead>
+        <tbody id="auditrows"></tbody>
+      </table>
+      <div class="toolbar"><button id="prev">‹ Mới hơn</button><span id="pageinfo" class="muted"></span><button id="next">Cũ hơn ›</button></div>
+      <div id="outbox" class="card hidden">
+        <h2 id="outtitle"></h2>
+        <div class="toolbar"><input id="outgrep" placeholder="Lọc (regexp)"><button id="outfilter">Lọc</button><button id="outclose">Đóng</button></div>
+        <pre id="outtext"></pre>
+      </div>
+    </div>
+  </section>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>
