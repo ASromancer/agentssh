@@ -111,6 +111,7 @@ input[type="file"].input { padding: 4px 6px; height: 34px; }
 .card { background: var(--s1); border: 1px solid var(--border); border-radius: var(--r3); box-shadow: var(--sh1); }
 .pill { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px; border-radius: 10px; font-size: var(--f12); font-weight: 600; letter-spacing: .01em; white-space: nowrap; color: var(--c, var(--text2)); background: color-mix(in srgb, var(--c, var(--text2)) 13%, transparent); border: 1px solid color-mix(in srgb, var(--c, var(--text2)) 28%, transparent); }
 .pill.read { --c: var(--read); } .pill.mutate, .pill.warn { --c: var(--warn); } .pill.destructive, .pill.bad { --c: var(--danger); } .pill.forbidden { --c: var(--forbid); } .pill.ok { --c: var(--ok); } .pill.accent { --c: var(--accent); } .pill.neutral { --c: var(--muted); }
+.pillbtn { cursor: pointer; font-family: inherit; } .pillbtn:hover { background: color-mix(in srgb, var(--c) 24%, transparent); }
 .pill .dot { width: 6px; height: 6px; box-shadow: none; background: currentColor; }
 .section-head { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
 .section-head h2 { font-size: var(--f16); font-weight: 650; margin-right: auto; }

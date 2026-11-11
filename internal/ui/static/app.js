@@ -669,8 +669,15 @@ function hostCard(name, h) {
   ag.append(el("span", "dot"), document.createTextNode(h.agent ? "agent" : "ẩn với agent"));
   tags.appendChild(ag);
   if (h.key) { const k = el("span", "pill neutral"); k.append(icon("key", 12), document.createTextNode(h.key)); tags.appendChild(k); }
-  const hk = el("span", "pill " + (trusted ? "ok" : "warn"), trusted ? "host key đã tin" : "host key chưa tin");
-  tags.appendChild(hk);
+  if (trusted) tags.appendChild(el("span", "pill ok", "host key đã tin"));
+  else { // one click to the trust flow (fingerprint confirm + approval)
+    const hk = el("button", "pill warn pillbtn");
+    hk.type = "button";
+    hk.title = "Bấm để kiểm tra fingerprint và tin host key";
+    hk.append(icon("shieldcheck", 12), document.createTextNode("host key chưa tin · Trust"));
+    hk.addEventListener("click", (e) => { e.stopPropagation(); trustHost(name).catch(fail); });
+    tags.appendChild(hk);
+  }
   c.append(top, tags);
   const open = () => openHostDrawer(name, h).catch(fail);
   c.addEventListener("click", open);
