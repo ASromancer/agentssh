@@ -156,7 +156,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 		q := r.URL.Query()
 		limit, _ := strconv.Atoi(q.Get("limit"))
 		offset, _ := strconv.Atoi(q.Get("offset"))
-		entries, total, err := readAudit(s.opt.AuditFile, q.Get("host"), q.Get("decision"), q.Get("since"), limit, offset)
+		entries, total, err := readAudit(s.opt.AuditFile, q.Get("host"), q.Get("decision"), q.Get("since"), q.Get("project"), limit, offset)
 		if err != nil {
 			fail(w, err)
 			return
@@ -241,7 +241,9 @@ func readLine(br *bufio.Reader, max int) ([]byte, error) {
 
 // readAudit returns audit entries newest first, filtered and paged.
 // ponytail: reads the whole file per request; index or tail-read if logs get huge.
-func readAudit(path, host, decision, since string, limit, offset int) ([]audit.Entry, int, error) {
+// project matches, case-insensitively, a substring of the entry's repo or cwd.
+func readAudit(path, host, decision, since, project string, limit, offset int) ([]audit.Entry, int, error) {
+	project = strings.ToLower(project)
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
@@ -268,7 +270,8 @@ func readAudit(path, host, decision, since string, limit, offset int) ([]audit.E
 		if len(line) > 0 {
 			var e audit.Entry
 			if json.Unmarshal(line, &e) == nil &&
-				!(host != "" && e.Host != host) && !(decision != "" && e.Decision != decision) && !(!sinceT.IsZero() && e.Time.Before(sinceT)) {
+				!(host != "" && e.Host != host) && !(decision != "" && e.Decision != decision) && !(!sinceT.IsZero() && e.Time.Before(sinceT)) &&
+				(project == "" || strings.Contains(strings.ToLower(e.Repo+"\n"+e.Cwd), project)) {
 				all = append(all, e)
 			}
 		}

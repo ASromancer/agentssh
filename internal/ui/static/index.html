@@ -76,6 +76,7 @@
         <div class="section-head"><h2>Nhật ký</h2></div>
         <div class="toolbar">
           <div class="searchbox grow"><i data-icon="search"></i><input id="fhost" class="input" placeholder="Host" aria-label="Lọc theo host" autocomplete="off"></div>
+          <div class="searchbox grow"><i data-icon="folder"></i><input id="fproject" class="input" placeholder="Project (repo / thư mục)" aria-label="Lọc theo project" autocomplete="off"></div>
           <select id="fdecision" class="select" aria-label="Quyết định">
             <option value="">Mọi quyết định</option><option>allow</option><option>approved</option><option>denied</option><option>forbidden</option><option>blocked</option><option>timeout</option><option>error</option>
           </select>
@@ -85,7 +86,7 @@
         <div class="card">
           <div class="tablewrap">
             <table>
-              <thead><tr><th>Thời gian</th><th>#</th><th>Host</th><th>Mức</th><th>Quyết định</th><th>Exit</th><th>Lệnh</th></tr></thead>
+              <thead><tr><th>Thời gian</th><th>#</th><th>Project</th><th>Agent</th><th>Host</th><th>Mức</th><th>Quyết định</th><th>Exit</th><th>Lệnh</th></tr></thead>
               <tbody id="auditrows"></tbody>
             </table>
           </div>

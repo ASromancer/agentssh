@@ -26,6 +26,7 @@ const ICONS = {
   key: ["M15 7a5 5 0 1 1-4.6 6.9L3 21.3V24h3v-2h2v-2h2l1.4-1.4A5 5 0 0 1 15 7z", "M16.5 8.5h.01"],
   lock: ["M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2z", "M7 11V7a5 5 0 0 1 10 0v4"],
   unlock: ["M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2z", "M7 11V7a5 5 0 0 1 9.9-1"],
+  folder: ["M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"],
   list: ["M8 6h13", "M8 12h13", "M8 18h13", "M3 6h.01", "M3 12h.01", "M3 18h.01"],
   fingerprint: ["M12 11v3a8 8 0 0 1-1 4", "M8 14a8 8 0 0 0 1 5", "M16 13a12 12 0 0 1-2 7", "M5 10a7 7 0 0 1 13-3.5", "M19 11v1a13 13 0 0 1-1 4", "M9 9.5a3 3 0 0 1 6 1"],
   sun: ["M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z", "M12 2v2", "M12 20v2", "M4.9 4.9l1.4 1.4", "M17.7 17.7l1.4 1.4", "M2 12h2", "M20 12h2", "M6.3 17.7l-1.4 1.4", "M19.1 4.9l-1.4 1.4"],
@@ -1068,7 +1069,7 @@ function decisionPill(d) {
   return el("span", "pill " + cls, d);
 }
 async function loadAudit() {
-  const q = new URLSearchParams({ host: $("fhost").value.trim(), decision: $("fdecision").value, since: $("fsince").value, limit: PAGE, offset: auditOffset });
+  const q = new URLSearchParams({ host: $("fhost").value.trim(), project: $("fproject").value.trim(), decision: $("fdecision").value, since: $("fsince").value, limit: PAGE, offset: auditOffset });
   const r = await call("GET", "/api/audit?" + q);
   const rows = $("auditrows");
   rows.replaceChildren();
@@ -1077,6 +1078,9 @@ async function loadAudit() {
     const td = (cls, ...kids) => { const t = el("td", cls); kids.forEach((k) => t.append(k)); tr.appendChild(t); return t; };
     td("nowrap", new Date(e.time).toLocaleString());
     td("nowrap", e.id ? "#" + e.id : "");
+    const proj = e.repo || e.cwd || "";
+    td("nowrap", proj.split(/[\\/]/).filter(Boolean).pop() || proj).title = proj + (e.repo && e.cwd && e.cwd !== e.repo ? "\ncwd: " + e.cwd : "");
+    td("nowrap muted", e.agent || "");
     td("mono", e.host || "");
     td("", e.level ? levelPill(e.level) : "");
     td("", decisionPill(e.decision));
@@ -1096,7 +1100,7 @@ async function loadAudit() {
   if (!r.entries.length) {
     const tr = el("tr");
     const t = el("td", "muted", "Không có mục nào");
-    t.colSpan = 7;
+    t.colSpan = 9;
     tr.appendChild(t);
     rows.appendChild(tr);
   }
@@ -1136,7 +1140,7 @@ async function showOutput(id) {
 }
 const reload = () => { auditOffset = 0; loadAudit().catch(fail); };
 $("ffilter").addEventListener("click", reload);
-["fhost", "fsince"].forEach((i) => $(i).addEventListener("keydown", (e) => { if (e.key === "Enter") reload(); }));
+["fhost", "fproject", "fsince"].forEach((i) => $(i).addEventListener("keydown", (e) => { if (e.key === "Enter") reload(); }));
 $("fdecision").addEventListener("change", reload);
 $("prev").addEventListener("click", () => { auditOffset = Math.max(0, auditOffset - PAGE); loadAudit().catch(fail); });
 $("next").addEventListener("click", () => { auditOffset += PAGE; loadAudit().catch(fail); });

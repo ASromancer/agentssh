@@ -201,9 +201,30 @@ func TestReadAuditSkipsHugeLineInMiddle(t *testing.T) {
 		return fmt.Sprintf(`{"time":"2026-11-11T1%d:00:00Z","id":%d,"kind":"run","cmd":%q,"decision":"allow"}`, id, id, cmd)
 	}
 	os.WriteFile(f, []byte(line(1, "a")+"\n"+line(2, strings.Repeat("x", 6<<20))+"\n"+line(3, "c")+"\n"+line(4, "d")), 0o600)
-	got, total, err := readAudit(f, "", "", "", 10, 0)
+	got, total, err := readAudit(f, "", "", "", "", 10, 0)
 	if err != nil || total != 3 || got[0].ID != 4 || got[2].ID != 1 {
 		t.Fatalf("%v %d %+v", err, total, got)
+	}
+}
+
+func TestReadAuditProjectFilter(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "audit.jsonl")
+	os.WriteFile(f, []byte(`{"time":"2026-11-11T10:00:00Z","id":1,"kind":"run","cmd":"a","decision":"allow","repo":"/home/u/Shop","cwd":"/home/u/Shop/api"}
+{"time":"2026-11-11T11:00:00Z","id":2,"kind":"run","cmd":"b","decision":"allow","cwd":"/tmp/scratch"}
+{"time":"2026-11-11T12:00:00Z","id":3,"kind":"run","cmd":"c","decision":"approved","repo":"/home/u/blog","cwd":"/home/u/blog"}
+`), 0o600)
+	for _, c := range []struct {
+		project string
+		ids     []int
+	}{{"shop", []int{1}}, {"scratch", []int{2}}, {"/home/u", []int{3, 1}}, {"", []int{3, 2, 1}}, {"nope", nil}} {
+		got, total, err := readAudit(f, "", "", "", c.project, 10, 0)
+		var ids []int
+		for _, e := range got {
+			ids = append(ids, e.ID)
+		}
+		if err != nil || total != len(c.ids) || fmt.Sprint(ids) != fmt.Sprint(c.ids) {
+			t.Errorf("project %q: %v %d %v, want %v", c.project, err, total, ids, c.ids)
+		}
 	}
 }
 
