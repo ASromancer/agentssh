@@ -114,3 +114,35 @@ Trang quản lý hiện chạy đúng nhưng trông sơ sài: CSS chỉ khoảng
 ## 7. Ngoài phạm vi
 
 - i18n nhiều ngôn ngữ, phím tắt để duyệt (cố ý không có, để tránh duyệt nhầm), biểu đồ thống kê.
+
+## 8. Bổ sung (2026-11-11): tham khảo các mẫu UX của Termius
+
+Chỉ học mẫu tương tác, không sao chép nhận diện, logo hay màu thương hiệu.
+
+- **Host dạng lưới card** (`repeat(auto-fill, minmax(260px, 1fr))`).
+  - Mỗi card có:
+    - ô avatar bo góc, màu sinh từ hash của tên, hiện 2 chữ cái đầu;
+    - tên, `user@host:port`;
+    - các pill profile, agent và host key;
+    - menu "…" gồm Sửa, Trust, Copy `user@host`, Xóa.
+  - Bấm vào card thì mở drawer sửa.
+  - Thanh tìm kiếm luôn ở đầu, lọc theo tên, địa chỉ và mô tả.
+  - Hai nhóm "Agent dùng được" và "Ẩn với agent".
+  - Nút chuyển lưới/danh sách, lưu vào `localStorage`.
+- **Tab "Kho khóa"** thay cho "Vault & key".
+  - Đầu tab là thẻ trạng thái vault.
+  - Mục **Key:** loại, fingerprint rút gọn có nút copy, dòng "Đang dùng bởi: web1, db" tính ở phía client từ `hosts.key`, và nút xóa.
+  - Mục **Mật khẩu:** liệt kê riêng.
+  - Ba hành động mở modal: Tạo key, Import key, Lưu mật khẩu.
+- **Tab mới "Known hosts":**
+  - Endpoint chỉ đọc `GET /api/knownhosts` trả về `[{host, type, fingerprint}]`, đọc từ `paths.KnownHosts()` bằng `ssh.ParseKnownHosts`.
+  - known_hosts không chứa bí mật nên được phép đọc.
+  - Hiện thêm tên host agentssh tương ứng (khớp `Addr()`) và nút "Trust lại", gọi đúng luồng `trust` hiện có.
+  - Có test cho endpoint.
+- **Responsive:**
+  - **từ 860px trở lên:** có sidebar;
+  - **640–860px:** thanh điều hướng trên;
+  - **dưới 640px:** thanh tab cố định ở đáy với icon và nhãn ngắn, đáy chừa khoảng an toàn bằng `env(safe-area-inset-bottom)`.
+
+  Drawer và modal chiếm toàn màn hình khi hẹp hơn 640px, và mọi vùng bấm có kích thước tối thiểu 40px.
+- `data-view` gồm: `approvals | hosts | keychain | knownhosts | log`. Test tĩnh cập nhật theo.
