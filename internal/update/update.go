@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -35,6 +36,10 @@ const (
 	metaTimeout  = 15 * time.Second
 	downloadTime = 5 * time.Minute
 )
+
+var hashRe = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
+
+var versionRe = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$`)
 
 type Release struct {
 	Version string            // "0.3.0" (tag without "v")
@@ -92,8 +97,8 @@ func Latest(ctx context.Context, base, current string) (*Release, error) {
 	for _, a := range j.Assets {
 		r.Assets[a.Name] = a.URL
 	}
-	if r.Version == "" {
-		return nil, errors.New("release lookup: empty tag")
+	if !versionRe.MatchString(r.Version) {
+		return nil, fmt.Errorf("release lookup: bad version %q", r.Version)
 	}
 	return r, nil
 }
@@ -159,13 +164,23 @@ func Verify(sums, sig []byte, pub ed25519.PublicKey) error {
 
 // SumFor returns the hex sha256 listed for name in a sha256sum-format file.
 func SumFor(sums []byte, name string) (string, error) {
+	found := ""
 	for _, line := range strings.Split(string(sums), "\n") {
 		f := strings.Fields(line)
 		if len(f) == 2 && strings.TrimPrefix(f[1], "*") == name {
-			return strings.ToLower(f[0]), nil
+			if found != "" {
+				return "", fmt.Errorf("duplicate checksum for %s", name)
+			}
+			if !hashRe.MatchString(f[0]) {
+				return "", fmt.Errorf("malformed checksum for %s", name)
+			}
+			found = strings.ToLower(f[0])
 		}
 	}
-	return "", fmt.Errorf("no checksum for %s", name)
+	if found == "" {
+		return "", fmt.Errorf("no checksum for %s", name)
+	}
+	return found, nil
 }
 
 // DetectKind classifies how the binary at exe was installed. It only inspects paths and files.
@@ -207,20 +222,26 @@ func AssetName(k Kind, goos, goarch, version string) string {
 	return "ostiary-" + goos + "-" + goarch + ".tar.gz"
 }
 
-// Apply verifies and installs release r over the install at exe.
-func Apply(ctx context.Context, r *Release, k Kind, exe, goos, goarch string, client *http.Client) (string, error) {
-	return apply(ctx, r, k, exe, goos, goarch, client, nil, PublicKey)
+// Apply verifies and installs release r (which must be newer than current) over the install at exe.
+func Apply(ctx context.Context, r *Release, current string, k Kind, exe, goos, goarch string, client *http.Client) (string, error) {
+	return apply(ctx, r, current, k, exe, goos, goarch, client, nil, publicKey)
 }
 
 // apply is Apply with injectable extra allowed hosts and key (tests only).
-func apply(ctx context.Context, r *Release, k Kind, exe, goos, goarch string, client *http.Client, allowHosts []string, pub ed25519.PublicKey) (string, error) {
+func apply(ctx context.Context, r *Release, current string, k Kind, exe, goos, goarch string, client *http.Client, allowHosts []string, pub ed25519.PublicKey) (string, error) {
+	if !Newer(r.Version, current) {
+		return "", fmt.Errorf("release %s is not newer than %s", r.Version, current)
+	}
 	name := AssetName(k, goos, goarch, r.Version)
 	if k == Deb {
 		return "", fmt.Errorf("installed from a .deb; update with: sudo apt install ./%s (download: %s)", name, r.Assets[name])
 	}
-	if client == nil {
-		client = &http.Client{Timeout: downloadTime}
+	c := http.Client{Timeout: downloadTime}
+	if client != nil {
+		c = *client
 	}
+	c.CheckRedirect = redirectCheck(allowHosts)
+	client = &c
 	get := func(n string) ([]byte, error) {
 		u, ok := r.Assets[n]
 		if !ok {
@@ -261,10 +282,38 @@ func apply(ctx context.Context, r *Release, k Kind, exe, goos, goarch string, cl
 	if err != nil {
 		return "", err
 	}
-	if err := install(filepath.Dir(exe), files, goos == "windows"); err != nil {
+	dsts := map[string]string{"ostiary": exe}
+	if goos == "windows" {
+		dir := filepath.Dir(exe)
+		dsts = map[string]string{"ostiary.exe": exe, "ostiary-app.exe": filepath.Join(dir, "ostiary-app.exe")}
+		if strings.EqualFold(filepath.Base(exe), "ostiary-app.exe") {
+			dsts["ostiary-app.exe"], dsts["ostiary.exe"] = exe, filepath.Join(dir, "ostiary.exe")
+		}
+	}
+	if err := install(filepath.Dir(exe), files, dsts, goos == "windows"); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("updated to %s; restart Ostiary to use it", r.Version), nil
+}
+
+var redirectHosts = map[string]bool{"github.com": true, "objects.githubusercontent.com": true, "release-assets.githubusercontent.com": true}
+
+func redirectCheck(extra []string) func(*http.Request, []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return errors.New("too many redirects")
+		}
+		h := req.URL.Hostname()
+		if req.URL.Scheme == "https" && redirectHosts[h] {
+			return nil
+		}
+		for _, x := range extra {
+			if req.URL.Host == x {
+				return nil
+			}
+		}
+		return fmt.Errorf("refusing redirect to %s", req.URL.Redacted())
+	}
 }
 
 func allowed(u string, extra []string) bool {
@@ -381,8 +430,13 @@ func extract(data []byte, archive string, names []string) (map[string][]byte, er
 	return out, nil
 }
 
-// install writes every file to a temp file in dir, then renames each into place.
-func install(dir string, files map[string][]byte, windows bool) error {
+// renameFn is os.Rename; tests inject failures.
+var renameFn = os.Rename
+
+// install stages every file as a temp file in dir, then moves them into place
+// (dsts maps member name -> destination). On Windows each existing destination is
+// first renamed to .old; any failure restores every .old and removes staged files.
+func install(dir string, files map[string][]byte, dsts map[string]string, windows bool) error {
 	tmps := map[string]string{}
 	cleanup := func() {
 		for _, t := range tmps {
@@ -397,25 +451,48 @@ func install(dir string, files map[string][]byte, windows bool) error {
 		}
 		tmps[n] = f.Name()
 		_, werr := f.Write(b)
+		serr := f.Sync()
 		cerr := f.Close()
-		if err := errors.Join(werr, cerr, os.Chmod(f.Name(), 0o755)); err != nil {
+		if err := errors.Join(werr, serr, cerr, os.Chmod(f.Name(), 0o755)); err != nil {
 			cleanup()
 			return err
 		}
 	}
+	type step struct {
+		dst           string
+		hadOld, moved bool
+	}
+	var done []*step
+	rollback := func() {
+		for i := len(done) - 1; i >= 0; i-- {
+			s := done[i]
+			if s.moved {
+				os.Remove(s.dst)
+			}
+			if s.hadOld {
+				os.Rename(s.dst+".old", s.dst)
+			}
+		}
+		cleanup()
+	}
 	for n, t := range tmps {
-		dst := filepath.Join(dir, n)
+		dst := dsts[n]
+		s := &step{dst: dst}
+		done = append(done, s)
 		if windows { // a running exe can be renamed but not overwritten
 			os.Remove(dst + ".old")
-			if err := os.Rename(dst, dst+".old"); err != nil && !os.IsNotExist(err) {
-				cleanup()
+			if err := renameFn(dst, dst+".old"); err == nil {
+				s.hadOld = true
+			} else if !os.IsNotExist(err) {
+				rollback()
 				return err
 			}
 		}
-		if err := os.Rename(t, dst); err != nil {
-			cleanup()
+		if err := renameFn(t, dst); err != nil {
+			rollback()
 			return err
 		}
+		s.moved = true
 		delete(tmps, n)
 	}
 	return nil
@@ -428,12 +505,15 @@ func runInstaller(data []byte, name string) (string, error) {
 	}
 	p := filepath.Join(d, name)
 	if err := os.WriteFile(p, data, 0o755); err != nil {
+		os.RemoveAll(d)
 		return "", err
 	}
 	cmd := exec.Command(p, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART")
 	if err := cmd.Start(); err != nil {
+		os.RemoveAll(d)
 		return "", err
 	}
+	// The temp dir is left in place: the installer needs the file while it runs.
 	go cmd.Wait()
 	return "installer is running; Ostiary will restart when it finishes", nil
 }
