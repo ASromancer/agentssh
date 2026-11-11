@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -601,6 +602,10 @@ func cmdDoctor(args []string) int {
 		ok("desktop notification sent (check that you saw it)")
 	}
 
+	if runtime.GOOS == "linux" && oldUnit(filepath.Join(home, ".config", "systemd", "user", "agentssh.service")) {
+		warn("the agentssh service starts before your desktop session (old unit); run 'agentssh install-service' to update it")
+	}
+
 	keys, _ := filepath.Glob(filepath.Join(home, ".ssh", "id_*"))
 	for _, k := range keys {
 		if strings.HasSuffix(k, ".pub") {
@@ -619,6 +624,26 @@ func cmdDoctor(args []string) int {
 		return 0
 	}
 	return 1
+}
+
+// oldUnit reports whether the systemd unit at path exists but does not start
+// with the graphical session.
+func oldUnit(path string) bool {
+	b, err := os.ReadFile(path)
+	return err == nil && !strings.Contains(string(b), "graphical-session.target")
+}
+
+// cmdInstallService re-runs the service install on an initialized setup, so
+// an upgrade can pick up a changed unit.
+func cmdInstallService(args []string) int {
+	if t, code := openTTY("install-service"); t == nil {
+		return code
+	}
+	if err := installService(); err != nil {
+		return errf(1, "%v", err)
+	}
+	fmt.Println("service updated; if approvals should use OS authentication, see 'agentssh install-polkit'")
+	return 0
 }
 
 func cmdInit(args []string) int {

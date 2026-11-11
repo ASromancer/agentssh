@@ -30,7 +30,7 @@ For agents:
 
 For the human user (need a real terminal; approvals and admin commands are confirmed
 in an OS authentication dialog, or with a code from a desktop notification as a fallback):
-  agentssh init [--passphrase] | unlock | lock | approve | reload | doctor | daemon | install-polkit
+  agentssh init [--passphrase] | unlock | lock | approve | reload | doctor | daemon | install-polkit | install-service
   agentssh host add|edit|ls|rm|trust ...
   agentssh key gen|import|export|ls|rm ...
   agentssh log [--follow] [-n N]
@@ -68,7 +68,7 @@ func Main(args []string) int {
 		"job": cmdJob, "explain": cmdExplain, "hook": cmdHook,
 		"init": cmdInit, "unlock": cmdUnlock, "lock": cmdLock, "approve": cmdApprove,
 		"reload": cmdReload, "host": cmdHost, "key": cmdKey, "log": cmdLog, "doctor": cmdDoctor,
-		"install-hooks": cmdInstallHooks, "daemon": cmdDaemon, "install-polkit": cmdInstallPolkit, "mcp": cmdMCP,
+		"install-hooks": cmdInstallHooks, "daemon": cmdDaemon, "install-polkit": cmdInstallPolkit, "install-service": cmdInstallService, "mcp": cmdMCP,
 		"version": func([]string) int { fmt.Println("agentssh", Version); return 0 },
 	}
 	if f, ok := cmds[args[0]]; ok {

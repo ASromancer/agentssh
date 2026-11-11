@@ -61,6 +61,7 @@ func TestBash(t *testing.T) {
 		{`agentssh approve`, "deny"},
 		{`agentssh key export web1`, "deny"},
 		{`agentssh reload`, "deny"},
+		{`agentssh install-service`, "deny"},
 		{`cd /tmp && agentssh approve`, "deny"},
 		{`ssh web1 uptime`, "deny"},
 		{`/usr/bin/ssh web1`, "deny"},

@@ -16,10 +16,14 @@ One static Go binary for Linux, macOS and Windows (amd64, arm64). Apache-2.0.
 Download a binary from [Releases](https://github.com/ASromancer/agentssh/releases) and put it on your `PATH`, or:
 
 ```sh
-go install github.com/ASromancer/agentssh@latest
+CGO_ENABLED=0 go install github.com/ASromancer/agentssh@latest
 agentssh init        # vault + master key in the OS keyring (or --passphrase), imports ~/.ssh/config,
                      # user service, and the skill + hook for each agent it finds
 ```
+
+The static build (`CGO_ENABLED=0`) ignores `LD_PRELOAD`, which a dynamic binary would load into the daemon.
+
+**Upgrading** from v0.1.x: run `agentssh install-service` once (Linux; it rewrites the user unit to start with your desktop session), then `sudo agentssh install-polkit` if you want OS authentication.
 
 `init` imports hosts from `~/.ssh/config`, but agents can't see any of them until you enable each one.
 
