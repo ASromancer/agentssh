@@ -9,7 +9,7 @@ SSH for AI coding agents (Claude Code, Codex) without handing them your keys.
 - **Output is compact.** Long output keeps the first and last 40 lines; the rest is one `agentssh out <id> --grep …` away.
 - **Everything is audited** to a JSONL file.
 
-One static Go binary for Linux and macOS (amd64, arm64). Apache-2.0.
+One static Go binary for Linux, macOS and Windows (amd64, arm64). Apache-2.0.
 
 ## Install
 
@@ -122,7 +122,17 @@ Three wrong codes deny the request.
 - **The agent hook is a soft layer.** It asks you about `mutate` commands, denies direct `ssh`/`scp`/`rsync`, and denies human-only `agentssh` subcommands. The daemon enforces forbidden commands, profiles and approvals whether or not the hook is installed.
 - **Classification is best-effort static analysis.** It handles quoting, escapes, wrappers, nested shells, globs on sensitive paths and dynamic command names; dynamic or unknown constructs are classified upward. Interpreters such as `python -c` count as plain `mutate`.
 
+## Windows
+
+- Needs Windows 10 1803 or later (AF_UNIX sockets). The daemon only accepts connections from processes running as the same Windows user; it checks the peer's token SID.
+- `agentssh init` registers a logon task (`schtasks`) that starts `agentssh daemon --detach` with no console window. The master key goes into Windows Credential Manager.
+- Approval codes arrive as toast notifications sent through Windows PowerShell. Admin commands read from the console (`CONIN$`).
+- Claude Code on Windows runs Bash through Git Bash. The hook also recognizes `ssh.exe`, `C:\` paths and the `%APPDATA%` directories.
+- Config lives in `%APPDATA%\agentssh`. State, logs and the socket live in `%LOCALAPPDATA%\agentssh`. Both are protected by the per-user ACL of your profile.
+
 ## Files
+
+Locations on Linux and macOS (see the Windows section above for Windows):
 
 | Path | Contents |
 |---|---|
@@ -138,5 +148,8 @@ Background jobs live in the daemon and are lost if it restarts. Their output sta
 ## Development
 
 ```sh
-go test ./...       # includes an end-to-end test against an in-process SSH server
+go test ./...                                         # unit tests + in-process SSH server test
+go build -o /tmp/agentssh . && python3 scripts/e2e.py /tmp/agentssh   # real sshd, real CLI (Linux/macOS)
 ```
+
+CI runs both on Linux, macOS and Windows (unit tests only on Windows).

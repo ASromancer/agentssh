@@ -149,7 +149,7 @@ func cmdOut(args []string) int {
 		l := lines[i-1]
 		if re == nil {
 			fmt.Print(l)
-		} else if re.MatchString(l) {
+		} else if re.MatchString(strings.TrimSuffix(l, "\n")) {
 			fmt.Printf("%d: %s", i, l)
 		}
 		if !strings.HasSuffix(l, "\n") {

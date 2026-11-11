@@ -479,7 +479,8 @@ func (s *Service) Status(_ *Empty, r *StatusReply) error {
 }
 
 func (s *Service) Pending(_ *Empty, r *[]approval.Request) error {
-	*r = s.d.q.Pending()
+	// Never nil: jsonrpc rejects a null result.
+	*r = append([]approval.Request{}, s.d.q.Pending()...)
 	sort.Slice(*r, func(i, j int) bool { return (*r)[i].ID < (*r)[j].ID })
 	return nil
 }

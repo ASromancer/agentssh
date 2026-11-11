@@ -23,6 +23,12 @@ jobs:
         if: runner.os != 'Windows'
       - run: go test ./...
         if: runner.os == 'Windows'
+      - name: e2e against a real OpenSSH server
+        if: runner.os != 'Windows'
+        run: |
+          command -v sshd || sudo apt-get install -y openssh-server
+          go build -o "$RUNNER_TEMP/agentssh" .
+          python3 scripts/e2e.py "$RUNNER_TEMP/agentssh"
   release:
     needs: test
     runs-on: ubuntu-latest

@@ -22,6 +22,7 @@ import (
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/ASromancer/agentssh/internal/approval"
 	"github.com/ASromancer/agentssh/internal/paths"
 	"github.com/ASromancer/agentssh/internal/sshconn"
 	"github.com/ASromancer/agentssh/internal/vault"
@@ -221,6 +222,11 @@ key = "k1"
 
 func TestDaemonEndToEnd(t *testing.T) {
 	h := setup(t)
+
+	var none []approval.Request
+	if err := h.call("Pending", &Empty{}, &none); err != nil || len(none) != 0 {
+		t.Fatalf("empty pending list: %v %v", none, err)
+	}
 
 	// Locked vault: 102.
 	if r := h.exec(ExecArgs{Cmd: "echo hi"}); r.Code != CodeNoDaemon {
