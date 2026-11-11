@@ -102,3 +102,57 @@ func TestWaitForLimit(t *testing.T) {
 		t.Fatalf("after decision: %+v", d)
 	}
 }
+
+func TestResolveWithoutCode(t *testing.T) {
+	s := &sink{}
+	q := NewQueue(s.notify, time.Minute)
+	q.UseCodes = func() bool { return false }
+	q.Add(Request{ID: 11, Host: "web1", Cmd: "rm x", Level: "destructive"})
+	if strings.Contains(s.last, "code:") {
+		t.Fatalf("notification leaks a code in OS-auth mode: %q", s.last)
+	}
+	if r, ok := q.Get(11); !ok || r.Cmd != "rm x" || r.Code != "" {
+		t.Fatalf("get: %+v %v", r, ok)
+	}
+	if _, err := q.Resolve(11, "s", "", "os"); err != nil {
+		t.Fatal(err)
+	}
+	_, d, _ := q.Wait(11)
+	if !d.OK || d.Auth != "os" || !d.CodeOK || !q.Sticky("web1", "rm x") {
+		t.Fatalf("%+v", d)
+	}
+	if _, err := q.Resolve(11, "y", "", "os"); err == nil {
+		t.Fatal("resolved twice")
+	}
+}
+
+func TestCodeDecisionAuth(t *testing.T) {
+	s := &sink{}
+	q := NewQueue(s.notify, time.Minute)
+	q.Add(Request{ID: 12})
+	q.Decide(12, s.code(), "y", "")
+	if _, d, _ := q.Wait(12); d.Auth != "code" {
+		t.Fatalf("auth %q", d.Auth)
+	}
+}
+
+func TestTakeTicket(t *testing.T) {
+	s := &sink{}
+	q := NewQueue(s.notify, time.Minute)
+	q.UseCodes = func() bool { return false }
+	s.last = ""
+	id, code := q.Ticket("key-rm a", "", 7)
+	if code != "" || s.last != "" {
+		t.Fatalf("OS-auth tickets must not notify a code: %q %q", code, s.last)
+	}
+	if _, err := q.Take(id, "key-rm b"); err == nil {
+		t.Fatal("ticket taken for another op")
+	}
+	id, _ = q.Ticket("key-rm a", "", 7)
+	if v, err := q.Take(id, "key-rm a"); err != nil || v != 7 {
+		t.Fatalf("%v %v", v, err)
+	}
+	if _, err := q.Take(id, "key-rm a"); err == nil {
+		t.Fatal("ticket reused")
+	}
+}

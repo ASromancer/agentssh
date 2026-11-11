@@ -39,6 +39,7 @@ type Decision struct {
 	Message string // optional note from the human, passed back to the agent
 	CodeOK  bool
 	Sticky  bool
+	Auth    string // code|os|none
 }
 
 const (
@@ -79,6 +80,10 @@ type ticket struct {
 type Queue struct {
 	Notify  func(title, body string) error
 	Timeout time.Duration
+	// UseCodes reports whether approvals use out-of-band codes. When it
+	// returns false, the daemon authenticates the human through the OS and
+	// notifications carry no code. nil means true.
+	UseCodes func() bool
 
 	mu         sync.Mutex
 	pending    map[int]*entry
@@ -94,6 +99,8 @@ func NewQueue(notify func(title, body string) error, timeout time.Duration) *Que
 
 func stickyKey(host, cmd string) string { return host + "\x00" + cmd }
 
+func (q *Queue) codes() bool { return q.UseCodes == nil || q.UseCodes() }
+
 // Sticky reports whether the same command on the same host was approved
 // with "s" in the last 30 minutes.
 func (q *Queue) Sticky(host, cmd string) bool {
@@ -107,9 +114,12 @@ func (q *Queue) Sticky(host, cmd string) bool {
 // It returns whether the notification was delivered.
 func (q *Queue) Add(r Request) bool {
 	e := &entry{req: r, code: NewCode(), done: make(chan Decision, 1)}
-	err := q.Notify("agentssh approval #"+fmt.Sprint(r.ID),
-		fmt.Sprintf("%s: %s [%s] code: %s", r.Host, r.Cmd, r.Level, e.code))
-	if err != nil {
+	body := fmt.Sprintf("%s: %s [%s] code: %s", r.Host, r.Cmd, r.Level, e.code)
+	if !q.codes() {
+		body = fmt.Sprintf("%s: %s [%s] — open agentssh to approve", r.Host, r.Cmd, r.Level)
+	}
+	err := q.Notify("agentssh approval #"+fmt.Sprint(r.ID), body)
+	if err != nil && q.codes() {
 		e.req.Code = e.code
 	}
 	q.mu.Lock()
@@ -202,7 +212,20 @@ func (q *Queue) Decide(id int, code, choice, msg string) (Decision, error) {
 		return Decision{}, fmt.Errorf("%w: %d tries left", ErrBadCode, left)
 	}
 	q.mu.Unlock()
-	d := Decision{CodeOK: true}
+	return q.Resolve(id, choice, msg, "code")
+}
+
+// Resolve applies a decision whose human proof was already checked by the
+// caller (OS authentication), or that needs none (denials).
+func (q *Queue) Resolve(id int, choice, msg, auth string) (Decision, error) {
+	q.mu.Lock()
+	e, ok := q.pending[id]
+	decided := ok && e.decided
+	q.mu.Unlock()
+	if !ok || decided {
+		return Decision{}, fmt.Errorf("no pending request #%d", id)
+	}
+	d := Decision{CodeOK: auth == "code" || auth == "os", Auth: auth}
 	switch choice {
 	case "y":
 		d.OK, d.Outcome = true, "approved"
@@ -215,8 +238,22 @@ func (q *Queue) Decide(id int, code, choice, msg string) (Decision, error) {
 	default:
 		return Decision{}, fmt.Errorf("unknown choice %q", choice)
 	}
+	if d.OK && !d.CodeOK {
+		return Decision{}, errors.New("approval needs a code or OS authentication")
+	}
 	q.finish(id, d)
 	return d, nil
+}
+
+// Get returns a pending, undecided request.
+func (q *Queue) Get(id int) (Request, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	e, ok := q.pending[id]
+	if !ok || e.decided {
+		return Request{}, false
+	}
+	return e.req, true
 }
 
 // Ticket starts an admin operation: it sends a code out of band and
@@ -234,10 +271,26 @@ func (q *Queue) Ticket(op, detail string, data any) (id int, code string) {
 	if detail != "" {
 		body = fmt.Sprintf("admin: %s (%s) code: %s", op, detail, t.code)
 	}
+	if !q.codes() {
+		return id, ""
+	}
 	if err := q.Notify("agentssh", body); err != nil {
 		return id, t.code
 	}
 	return id, ""
+}
+
+// Take consumes a ticket without a code; the caller authenticates the
+// human through the OS instead.
+func (q *Queue) Take(id int, op string) (any, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	t, ok := q.tickets[id]
+	delete(q.tickets, id)
+	if !ok || t.op != op || time.Now().After(t.expires) {
+		return nil, errors.New("approval ticket expired or invalid; start again")
+	}
+	return t.data, nil
 }
 
 // Check verifies an admin code. A ticket is single-use and bound to op.
