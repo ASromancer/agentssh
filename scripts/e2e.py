@@ -157,7 +157,7 @@ def main():
         rc, _, err = run("approve")
         check(rc == 2 and "real terminal" in err, "approve refuses to run without a terminal")
 
-        t = Tty("init")
+        t = Tty("init", "--passphrase")
         t.expect("new vault passphrase: ")
         t.send(PASS)
         t.expect("repeat passphrase: ")

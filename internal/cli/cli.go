@@ -27,7 +27,7 @@ For agents:
   agentssh explain "<cmd>" [--host <host>]
 
 For the human user (need a real terminal; most need a code from a desktop notification):
-  agentssh init | unlock | lock | approve | reload | doctor | daemon
+  agentssh init [--passphrase] | unlock | lock | approve | reload | doctor | daemon
   agentssh host add|edit|ls|rm|trust ...
   agentssh key gen|import|export|ls|rm ...
   agentssh log [--follow] [-n N]

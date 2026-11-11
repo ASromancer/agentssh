@@ -15,7 +15,7 @@ One static Go binary for Linux, macOS and Windows (amd64, arm64). Apache-2.0.
 
 ```sh
 go install github.com/ASromancer/agentssh@latest   # or download a release binary
-agentssh init        # vault + master key in the OS keyring, imports ~/.ssh/config, user service, Claude hook
+agentssh init        # vault + master key in the OS keyring (or --passphrase), imports ~/.ssh/config, service, Claude hook
 ```
 
 `init` imports hosts from `~/.ssh/config`, but agents can't see any of them until you enable each one.

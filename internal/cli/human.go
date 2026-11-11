@@ -586,6 +586,11 @@ func cmdDoctor(args []string) int {
 }
 
 func cmdInit(args []string) int {
+	fs := newFlags("init")
+	usePass := fs.Bool("passphrase", false, "protect the vault with a passphrase instead of the OS keyring")
+	if _, err := parse(fs, args); err != nil {
+		return 2
+	}
 	t, code := openTTY("init")
 	if t == nil {
 		return code
@@ -600,8 +605,12 @@ func cmdInit(args []string) int {
 	}
 
 	key, salt := vault.NewKey(), []byte(nil)
-	if err := vault.KeyringSet(key); err != nil {
-		t.printf("OS keyring unavailable (%v); the vault will use a passphrase.\n", err)
+	keyringErr := errors.New("--passphrase given")
+	if !*usePass {
+		keyringErr = vault.KeyringSet(key)
+	}
+	if err := keyringErr; err != nil {
+		t.printf("not using the OS keyring (%v); the vault will use a passphrase.\n", err)
 		for {
 			p1 := t.secret("new vault passphrase: ")
 			if len(p1) < 8 {

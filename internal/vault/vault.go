@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/zalando/go-keyring"
 	"golang.org/x/crypto/argon2"
@@ -148,8 +149,28 @@ func (d *Data) Wipe() {
 
 const keyringService, keyringUser = "agentssh", "master-key"
 
+// keyringTimeout bounds OS keyring calls: a locked macOS Keychain or a
+// D-Bus Secret Service that never answers must not hang init or the daemon.
+const keyringTimeout = 10 * time.Second
+
+func withTimeout[T any](f func() (T, error)) (T, error) {
+	type res struct {
+		v   T
+		err error
+	}
+	ch := make(chan res, 1)
+	go func() { v, err := f(); ch <- res{v, err} }()
+	select {
+	case r := <-ch:
+		return r.v, r.err
+	case <-time.After(keyringTimeout):
+		var zero T
+		return zero, errors.New("OS keyring did not answer within 10s")
+	}
+}
+
 func KeyringGet() (*[32]byte, error) {
-	s, err := keyring.Get(keyringService, keyringUser)
+	s, err := withTimeout(func() (string, error) { return keyring.Get(keyringService, keyringUser) })
 	if err != nil {
 		return nil, err
 	}
@@ -163,5 +184,8 @@ func KeyringGet() (*[32]byte, error) {
 }
 
 func KeyringSet(k *[32]byte) error {
-	return keyring.Set(keyringService, keyringUser, base64.StdEncoding.EncodeToString(k[:]))
+	_, err := withTimeout(func() (struct{}, error) {
+		return struct{}{}, keyring.Set(keyringService, keyringUser, base64.StdEncoding.EncodeToString(k[:]))
+	})
+	return err
 }
