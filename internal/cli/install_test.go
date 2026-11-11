@@ -85,3 +85,25 @@ func TestAgentStates(t *testing.T) {
 		}
 	}
 }
+
+func TestCodexRulesAllowOstiaryOutsideSandbox(t *testing.T) {
+	r := codexRules()
+	if !strings.Contains(r, `prefix_rule(pattern=["ostiary"], decision="allow"`) {
+		t.Fatal("missing allow rule for ostiary")
+	}
+	if !strings.Contains(r, `prefix_rule(pattern=["ostiary", "stop"], decision="forbidden"`) {
+		t.Fatal("human-only forbidden rules must stay")
+	}
+	home := t.TempDir()
+	p := filepath.Join(codexHome(home), "rules", "ostiary.rules")
+	refreshCodexRules(home) // not installed: must not create it
+	if _, err := os.Stat(p); err == nil {
+		t.Fatal("refresh created a rules file for an agent that is not installed")
+	}
+	os.MkdirAll(filepath.Dir(p), 0o700)
+	os.WriteFile(p, []byte("# old\n"), 0o600)
+	refreshCodexRules(home)
+	if b, _ := os.ReadFile(p); string(b) != r {
+		t.Fatal("installed rules not refreshed")
+	}
+}

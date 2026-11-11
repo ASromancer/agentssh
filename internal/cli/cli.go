@@ -58,7 +58,7 @@ func init() {
 var guidance = map[int]string{
 	daemon.CodeBlocked:  "blocked by policy: do not retry another way; tell the user what you wanted to do",
 	daemon.CodeDenied:   "stop and ask the user; do not retry another way",
-	daemon.CodeNoDaemon: "ask the user to start or unlock ostiary",
+	daemon.CodeNoDaemon: "if you run in a sandbox (e.g. Codex), it may block ostiary's local socket: re-run this ostiary command outside the sandbox first; otherwise ask the user to start or unlock ostiary",
 }
 
 // Main runs a subcommand and returns the process exit code.
