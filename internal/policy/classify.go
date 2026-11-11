@@ -538,3 +538,66 @@ func (c *classifier) pipe(b *syntax.BinaryCmd, base int) {
 		}
 	}
 }
+
+// Calls returns the argv of every simple command in cmd, with paths and
+// wrappers (sudo, env, ...) stripped and static "sh -c" scripts expanded.
+// Words that are not static read as "$?". writes reports redirects into
+// real files. Used by agent hooks to spot ssh and agentssh invocations.
+func Calls(cmd string) (calls [][]string, writes bool, err error) {
+	err = calls1(cmd, 0, &calls, &writes)
+	return calls, writes, err
+}
+
+func calls1(src string, depth int, calls *[][]string, writes *bool) error {
+	f, err := syntax.NewParser().Parse(strings.NewReader(src), "")
+	if err != nil {
+		return err
+	}
+	syntax.Walk(f, func(n syntax.Node) bool {
+		st, ok := n.(*syntax.Stmt)
+		if !ok {
+			return true
+		}
+		for _, r := range st.Redirs {
+			if r.Word == nil {
+				continue
+			}
+			c := &classifier{}
+			c.redirect(r, 0)
+			*writes = *writes || len(c.res.Reasons) > 0
+		}
+		call, ok := st.Cmd.(*syntax.CallExpr)
+		if !ok || len(call.Args) == 0 {
+			return true
+		}
+		ws := make([]word, len(call.Args))
+		for i, w := range call.Args {
+			ws[i] = evalWord(w, 0)
+		}
+		ws, wrapOnly, static := normalize(ws)
+		if ws == nil {
+			ws = wrapOnly
+		}
+		argv := make([]string, len(ws))
+		for i, w := range ws {
+			argv[i] = w.s
+			if !w.static {
+				argv[i] = "$?"
+			}
+		}
+		if !static {
+			argv[0] = "$?"
+		}
+		*calls = append(*calls, argv)
+		if shells[argv[0]] && depth < maxDepth {
+			for i := 1; i+1 < len(ws); i++ {
+				if ws[i].s == "-c" && ws[i+1].static {
+					calls1(ws[i+1].s, depth+1, calls, writes)
+					break
+				}
+			}
+		}
+		return true
+	})
+	return nil
+}

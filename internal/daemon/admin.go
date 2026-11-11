@@ -11,11 +11,11 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/hiepnt01/agentssh/internal/audit"
-	"github.com/hiepnt01/agentssh/internal/hosts"
-	"github.com/hiepnt01/agentssh/internal/paths"
-	"github.com/hiepnt01/agentssh/internal/sshconn"
-	"github.com/hiepnt01/agentssh/internal/vault"
+	"github.com/ASromancer/agentssh/internal/audit"
+	"github.com/ASromancer/agentssh/internal/hosts"
+	"github.com/ASromancer/agentssh/internal/paths"
+	"github.com/ASromancer/agentssh/internal/sshconn"
+	"github.com/ASromancer/agentssh/internal/vault"
 )
 
 func vaultSalt() ([]byte, error) { return vault.Salt(paths.Vault()) }

@@ -10,7 +10,7 @@ import (
 type sink struct{ last string }
 
 func (s *sink) notify(_, body string) error { s.last = body; return nil }
-func (s *sink) code() string               { return s.last[strings.LastIndex(s.last, " ")+1:] }
+func (s *sink) code() string                { return s.last[strings.LastIndex(s.last, " ")+1:] }
 
 func TestWrongCodeThreeTimes(t *testing.T) {
 	s := &sink{}

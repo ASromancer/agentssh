@@ -15,7 +15,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/hiepnt01/agentssh/internal/policy"
+	"github.com/ASromancer/agentssh/internal/policy"
 )
 
 type Host struct {

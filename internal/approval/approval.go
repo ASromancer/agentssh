@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hiepnt01/agentssh/internal/policy"
+	"github.com/ASromancer/agentssh/internal/policy"
 )
 
 type Request struct {

@@ -20,13 +20,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hiepnt01/agentssh/internal/approval"
-	"github.com/hiepnt01/agentssh/internal/audit"
-	"github.com/hiepnt01/agentssh/internal/hosts"
-	"github.com/hiepnt01/agentssh/internal/paths"
-	"github.com/hiepnt01/agentssh/internal/policy"
-	"github.com/hiepnt01/agentssh/internal/sshconn"
-	"github.com/hiepnt01/agentssh/internal/vault"
+	"github.com/ASromancer/agentssh/internal/approval"
+	"github.com/ASromancer/agentssh/internal/audit"
+	"github.com/ASromancer/agentssh/internal/hosts"
+	"github.com/ASromancer/agentssh/internal/paths"
+	"github.com/ASromancer/agentssh/internal/policy"
+	"github.com/ASromancer/agentssh/internal/sshconn"
+	"github.com/ASromancer/agentssh/internal/vault"
 )
 
 const outRetention = 7 * 24 * time.Hour

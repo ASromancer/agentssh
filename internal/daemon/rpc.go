@@ -6,9 +6,9 @@ import (
 	"net/rpc/jsonrpc"
 	"time"
 
-	"github.com/hiepnt01/agentssh/internal/hosts"
-	"github.com/hiepnt01/agentssh/internal/paths"
-	"github.com/hiepnt01/agentssh/internal/policy"
+	"github.com/ASromancer/agentssh/internal/hosts"
+	"github.com/ASromancer/agentssh/internal/paths"
+	"github.com/ASromancer/agentssh/internal/policy"
 )
 
 // agentssh-specific exit codes (spec 6.1).
