@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/rpc"
 	"os"
+	"runtime/debug"
 	"strings"
 
 	"github.com/ASromancer/agentssh/internal/daemon"
@@ -41,6 +42,13 @@ Only errors produced by agentssh itself print a stderr line starting with "agent
 
 // Version is set at release time with -ldflags "-X .../internal/cli.Version=x.y.z".
 var Version = "dev"
+
+func init() {
+	// go install github.com/ASromancer/agentssh@vX stamps the module version.
+	if bi, ok := debug.ReadBuildInfo(); ok && Version == "dev" && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		Version = strings.TrimPrefix(bi.Main.Version, "v")
+	}
+}
 
 var guidance = map[int]string{
 	daemon.CodeBlocked:  "blocked by policy: do not retry another way; tell the user what you wanted to do",
