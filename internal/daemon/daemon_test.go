@@ -24,12 +24,12 @@ import (
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/ASromancer/agentssh/internal/approval"
-	"github.com/ASromancer/agentssh/internal/hosts"
-	"github.com/ASromancer/agentssh/internal/humanok"
-	"github.com/ASromancer/agentssh/internal/paths"
-	"github.com/ASromancer/agentssh/internal/sshconn"
-	"github.com/ASromancer/agentssh/internal/vault"
+	"github.com/ASromancer/ostiary/internal/approval"
+	"github.com/ASromancer/ostiary/internal/hosts"
+	"github.com/ASromancer/ostiary/internal/humanok"
+	"github.com/ASromancer/ostiary/internal/paths"
+	"github.com/ASromancer/ostiary/internal/sshconn"
+	"github.com/ASromancer/ostiary/internal/vault"
 )
 
 // testServer is a minimal SSH server that runs exec requests with sh -c
@@ -183,9 +183,9 @@ func setup(t *testing.T) *harness {
 	if runtime.GOOS == "windows" {
 		sockBase = ""
 	}
-	sockDir, _ := os.MkdirTemp(sockBase, "agentssh-test")
+	sockDir, _ := os.MkdirTemp(sockBase, "ostiary-test")
 	t.Cleanup(func() { os.RemoveAll(sockDir) })
-	t.Setenv("AGENTSSH_SOCKET", filepath.Join(sockDir, "s"))
+	t.Setenv("OSTIARY_SOCKET", filepath.Join(sockDir, "s"))
 
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	sshPub, _ := ssh.NewPublicKey(pub)
@@ -306,7 +306,7 @@ func TestDaemonEndToEnd(t *testing.T) {
 	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Code: "XXXX", Choice: "y"}, &Empty{}); err == nil {
 		t.Fatal("bad code accepted")
 	}
-	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Code: h.lastCode(), Choice: "s"}, &Empty{}); err != nil {
+	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Code: h.lastCode(), Choice: "y"}, &Empty{}); err != nil {
 		t.Fatal(err)
 	}
 	rm.ApprovalID = r.Pending
@@ -316,11 +316,24 @@ func TestDaemonEndToEnd(t *testing.T) {
 	if _, err := os.Stat(victim); !os.IsNotExist(err) {
 		t.Fatal("rm did not run")
 	}
-	// Sticky approval covers the identical command only.
-	if r := h.exec(ExecArgs{Cmd: "rm " + victim}); r.Pending != 0 || r.Exit == 0 {
+	// Sticky approval (mutate only) covers the identical command only.
+	tch := ExecArgs{Env: Env{Agent: "codex"}, Cmd: "touch " + victim}
+	r = h.exec(tch)
+	if r.Pending == 0 || r.Level != "mutate" {
+		t.Fatalf("expected pending mutate: %+v", r)
+	}
+	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Code: h.lastCode(), Choice: "s"}, &Empty{}); err != nil {
+		t.Fatal(err)
+	}
+	tch.ApprovalID = r.Pending
+	if r := h.exec(tch); r.Code != 0 || r.Exit != 0 {
+		t.Fatalf("approved run: %+v", r)
+	}
+	tch.ApprovalID = 0
+	if r := h.exec(tch); r.Pending != 0 || r.Exit != 0 {
 		t.Fatalf("sticky: %+v", r)
 	}
-	if r := h.exec(ExecArgs{Cmd: "rm -f " + victim}); r.Pending == 0 {
+	if r := h.exec(ExecArgs{Env: Env{Agent: "codex"}, Cmd: "touch -c " + victim}); r.Pending == 0 {
 		t.Fatalf("sticky leaked to another command: %+v", r)
 	}
 
@@ -329,6 +342,18 @@ func TestDaemonEndToEnd(t *testing.T) {
 	h.call("Decide", &DecideArgs{ID: r.Pending, Code: h.lastCode(), Choice: "m", Note: "not now"}, &Empty{})
 	if r2 := h.exec(ExecArgs{Cmd: "rm -rf /tmp/nothing-here", ApprovalID: r.Pending}); r2.Code != CodeDenied || !strings.Contains(r2.Msg, "not now") {
 		t.Fatalf("denied: %+v", r2)
+	}
+
+	// Destructive requests refuse the 30-minute option; one-off approval still works.
+	r = h.exec(ExecArgs{Cmd: "rm -rf /tmp/nothing-here2"})
+	if r.Level != "destructive" {
+		t.Fatalf("level: %+v", r)
+	}
+	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Code: h.lastCode(), Choice: "s"}, &Empty{}); err == nil || !strings.Contains(err.Error(), "cannot be approved for 30 minutes") {
+		t.Fatalf("destructive sticky: %v", err)
+	}
+	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Code: h.lastCode(), Choice: "y"}, &Empty{}); err != nil {
+		t.Fatalf("destructive once: %v", err)
 	}
 
 	// Transfers.
@@ -509,7 +534,7 @@ func TestOSAuth(t *testing.T) {
 }
 
 func TestDialogText(t *testing.T) {
-	const blank = "confirm an agentssh action"
+	const blank = "confirm an ostiary action"
 	pad := "[DESTRUCTIVE] approve on h: ls" + strings.Repeat(" ", 1500) + "; rm -rf ~"
 	got := dialogText(pad)
 	if got != "[DESTRUCTIVE] approve on h: ls ; rm -rf ~" {
@@ -588,7 +613,7 @@ func TestOSAuthBreaksDecide(t *testing.T) {
 	}
 	err := h.call("Decide", &DecideArgs{ID: r.Pending, Choice: "y"}, &Empty{})
 	if err == nil || !strings.Contains(err.Error(), "no polkit authentication agent") ||
-		!strings.Contains(err.Error(), "agentssh doctor") || !strings.Contains(err.Error(), "AGENTSSH_OS_AUTH=0") {
+		!strings.Contains(err.Error(), "ostiary doctor") || !strings.Contains(err.Error(), "OSTIARY_OS_AUTH=0") {
 		t.Fatalf("decide: %v", err)
 	}
 	var st StatusReply
@@ -622,7 +647,7 @@ func TestOSAuthBreaksAdmin(t *testing.T) {
 		t.Fatalf("expected OS mode: %+v", br)
 	}
 	err := h.call("Admin", &AdminArgs{Ticket: br.Ticket, Op: "key-gen", Name: "k9"}, &ar)
-	if err == nil || !strings.Contains(err.Error(), "AGENTSSH_OS_AUTH=0") {
+	if err == nil || !strings.Contains(err.Error(), "OSTIARY_OS_AUTH=0") {
 		t.Fatalf("admin: %v", err)
 	}
 	h.call("Begin", &BeginArgs{Op: "key-gen", Name: "k9"}, &br)
@@ -673,11 +698,11 @@ func TestOSAuthOff(t *testing.T) {
 		{"windows", "", false}, {"windows", "1", true}, {"windows", "yes", false},
 	} {
 		if why := osAuthOff(c.goos, c.env); (why == "") != c.on {
-			t.Errorf("%s AGENTSSH_OS_AUTH=%q: %q", c.goos, c.env, why)
+			t.Errorf("%s OSTIARY_OS_AUTH=%q: %q", c.goos, c.env, why)
 		}
 	}
 	if err := authOff(osAuthOff("darwin", "")).Available(); !errors.Is(err, humanok.ErrUnavailable) ||
-		!strings.Contains(err.Error(), "set AGENTSSH_OS_AUTH=1") {
+		!strings.Contains(err.Error(), "set OSTIARY_OS_AUTH=1") {
 		t.Fatalf("%v", err)
 	}
 }
@@ -719,9 +744,9 @@ func TestRunning(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		base = ""
 	}
-	dir, _ := os.MkdirTemp(base, "agentssh-run")
+	dir, _ := os.MkdirTemp(base, "ostiary-run")
 	t.Cleanup(func() { os.RemoveAll(dir) })
-	t.Setenv("AGENTSSH_SOCKET", filepath.Join(dir, "s"))
+	t.Setenv("OSTIARY_SOCKET", filepath.Join(dir, "s"))
 	if Running() {
 		t.Fatal("running with no socket")
 	}
@@ -763,5 +788,32 @@ func TestUILogin(t *testing.T) {
 	h.call("Status", &Empty{}, &st)
 	if st.UI != "http://127.0.0.1:1/" {
 		t.Fatalf("UI %q", st.UI)
+	}
+}
+
+func TestBeginFailsFastWhenLocked(t *testing.T) {
+	h := setup(t)
+	var br BeginReply
+	for _, op := range []string{"host-set", "host-rm", "reload", "key-gen", "key-import", "key-rm", "key-export"} {
+		err := h.call("Begin", &BeginArgs{Op: op, Name: "x"}, &br)
+		if err == nil || !strings.Contains(err.Error(), "vault is locked") || br.Ticket != 0 {
+			t.Fatalf("%s: err=%v reply=%+v", op, err, br)
+		}
+	}
+}
+
+func TestShutdown(t *testing.T) {
+	h := setup(t) // setup already serves; start a second daemon-less check via RPC
+	if !Running() {
+		t.Fatal("not running")
+	}
+	if err := h.call("Shutdown", &Empty{}, &Empty{}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 40 && Running(); i++ {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if Running() {
+		t.Fatal("still running after Shutdown")
 	}
 }

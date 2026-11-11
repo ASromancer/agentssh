@@ -9,7 +9,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	"github.com/ASromancer/agentssh/internal/paths"
+	"github.com/ASromancer/ostiary/internal/paths"
 )
 
 func openConsole() (in, out *os.File, err error) {
@@ -33,7 +33,7 @@ func echoOff(in *os.File) (restore func()) {
 	return func() { _ = windows.SetConsoleMode(h, mode) }
 }
 
-// startDetached runs "agentssh daemon" without a console window.
+// startDetached runs "ostiary daemon" without a console window.
 func startDetached(logPath string, extra []string) error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -52,20 +52,52 @@ func startDetached(logPath string, extra []string) error {
 }
 
 // installService registers a logon task that starts the daemon hidden,
-// then starts it now.
-func installService() error {
+// then starts it now when startNow.
+func installService(startNow bool) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
+	if app := filepath.Join(filepath.Dir(exe), "ostiary-app.exe"); fileExists0(app) {
+		exe = app // GUI binary: no console window at every sign-in
+	}
 	tr := fmt.Sprintf(`"%s" daemon --detach`, exe)
 	if out, err := exec.Command("schtasks", "/Create", "/F", "/SC", "ONLOGON", "/RL", "LIMITED",
-		"/TN", "agentssh", "/TR", tr).CombinedOutput(); err != nil {
+		"/TN", "ostiary", "/TR", tr).CombinedOutput(); err != nil {
 		return fmt.Errorf("schtasks: %v: %s", err, out)
 	}
-	if err := startDetached(filepath.Join(paths.State(), "daemon.log"), nil); err != nil {
-		return err
+	if startNow {
+		if err := startDetached(filepath.Join(paths.State(), "daemon.log"), nil); err != nil {
+			return err
+		}
 	}
-	fmt.Println("logon task 'agentssh' installed")
+	fmt.Println("logon task 'ostiary' installed")
 	return nil
+}
+
+// removeService deletes the logon task; the running daemon is left alone.
+func removeService() error {
+	if !serviceInstalled() { // a missing task is success
+		return nil
+	}
+	if out, err := exec.Command("schtasks", "/Delete", "/F", "/TN", "ostiary").CombinedOutput(); err != nil {
+		return fmt.Errorf("schtasks: %v: %s", err, out)
+	}
+	return nil
+}
+
+func startService() error {
+	if out, err := exec.Command("schtasks", "/Run", "/TN", "ostiary").CombinedOutput(); err != nil {
+		return fmt.Errorf("schtasks: %v: %s", err, out)
+	}
+	return nil
+}
+
+func serviceInstalled() bool {
+	return exec.Command("schtasks", "/Query", "/TN", "ostiary").Run() == nil
+}
+
+func fileExists0(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }

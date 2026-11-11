@@ -16,9 +16,9 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 
-	"github.com/ASromancer/agentssh/internal/audit"
-	"github.com/ASromancer/agentssh/internal/daemon"
-	"github.com/ASromancer/agentssh/internal/hosts"
+	"github.com/ASromancer/ostiary/internal/audit"
+	"github.com/ASromancer/ostiary/internal/daemon"
+	"github.com/ASromancer/ostiary/internal/hosts"
 )
 
 const maxBody = 1 << 20
@@ -100,6 +100,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 			Code, Op, Name               string
 			Host                         *hosts.Host
 			Key, KeyPassphrase, Password string
+			Pass                         string
 		}
 		if !readJSON(w, r, &a) {
 			return
@@ -116,12 +117,34 @@ func (s *Server) routes(mux *http.ServeMux) {
 		if a.Password != "" {
 			args.Password = []byte(a.Password)
 		}
+		if a.Pass != "" {
+			args.Pass = []byte(a.Pass)
+		}
 		rep, err := b.Admin(args)
 		if err != nil {
 			fail(w, err)
 			return
 		}
 		writeJSON(w, map[string]string{"out": rep.Out})
+	})
+	mux.HandleFunc("GET /api/setup", func(w http.ResponseWriter, r *http.Request) {
+		rep, err := b.Setup()
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		writeJSON(w, rep)
+	})
+	mux.HandleFunc("POST /api/setup/skip", func(w http.ResponseWriter, r *http.Request) {
+		var a struct{ Skip bool }
+		if !readJSON(w, r, &a) {
+			return
+		}
+		if err := b.SetupSkip(a.Skip); err != nil {
+			fail(w, err)
+			return
+		}
+		writeJSON(w, struct{}{})
 	})
 	mux.HandleFunc("POST /api/unlock", func(w http.ResponseWriter, r *http.Request) {
 		var a struct{ Pass string }
@@ -184,7 +207,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 		writeJSON(w, checks)
 	})
 	mux.HandleFunc("GET /api/knownhosts", func(w http.ResponseWriter, r *http.Request) {
-		names := map[string]string{} // normalized address -> agentssh host name
+		names := map[string]string{} // normalized address -> ostiary host name
 		if hl, err := b.HostList(); err == nil {
 			for name, h := range hl.Hosts {
 				names[knownhosts.Normalize(h.Addr())] = name
@@ -197,7 +220,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 
 // normalizeKey turns an uploaded private key (possibly passphrase
 // protected) into the unencrypted OpenSSH PEM the vault stores, like
-// 'agentssh key import' does.
+// 'ostiary key import' does.
 func normalizeKey(b []byte, passphrase, name string) ([]byte, error) {
 	raw, err := ssh.ParseRawPrivateKey(b)
 	var missing *ssh.PassphraseMissingError
@@ -210,7 +233,7 @@ func normalizeKey(b []byte, passphrase, name string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse key: %w", err)
 	}
-	block, err := ssh.MarshalPrivateKey(raw, "agentssh-"+name)
+	block, err := ssh.MarshalPrivateKey(raw, "ostiary-"+name)
 	if err != nil {
 		return nil, err
 	}
@@ -333,7 +356,7 @@ type knownHost struct {
 	Host        string `json:"host"`
 	Type        string `json:"type"`
 	Fingerprint string `json:"fingerprint"`
-	Name        string `json:"name,omitempty"` // matching agentssh host, if any
+	Name        string `json:"name,omitempty"` // matching ostiary host, if any
 }
 
 const maxKnownHosts = 10000

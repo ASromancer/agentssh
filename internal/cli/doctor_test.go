@@ -31,7 +31,7 @@ func TestOldUnit(t *testing.T) {
 func TestDoctorChecksShape(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("AGENTSSH_SOCKET", filepath.Join(t.TempDir(), "none.sock"))
+	t.Setenv("OSTIARY_SOCKET", filepath.Join(t.TempDir(), "none.sock"))
 	checks := doctorChecks(false)
 	if len(checks) == 0 || checks[0].OK || !strings.Contains(checks[0].Text, "daemon is not running") {
 		t.Fatalf("%+v", checks)
@@ -39,17 +39,17 @@ func TestDoctorChecksShape(t *testing.T) {
 }
 
 func TestDetachArgs(t *testing.T) {
-	if got := detachArgs(false, false, 0); len(got) != 0 {
+	if got := detachArgs(false, false, 0, 0); len(got) != 0 {
 		t.Fatalf("defaults: %v", got)
 	}
-	if got := strings.Join(detachArgs(true, true, 8080), " "); got != "--no-ui --no-tray --ui-port 8080" {
+	if got := strings.Join(detachArgs(true, true, 8080, 0), " "); got != "--no-ui --no-tray --ui-port 8080" {
 		t.Fatalf("got %q", got)
 	}
 }
 
 func TestDialRetryWaits(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	t.Setenv("AGENTSSH_SOCKET", filepath.Join(t.TempDir(), "none.sock"))
+	t.Setenv("OSTIARY_SOCKET", filepath.Join(t.TempDir(), "none.sock"))
 	start := time.Now()
 	if _, err := dialRetry(0); err == nil || time.Since(start) > 150*time.Millisecond {
 		t.Fatalf("wait=0 must fail fast: %v", err)

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ASromancer/agentssh/internal/paths"
+	"github.com/ASromancer/ostiary/internal/paths"
 )
 
 func TestReadOutput(t *testing.T) {

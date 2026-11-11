@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 )
 
@@ -26,12 +27,13 @@ func echoOff(in *os.File) (restore func()) {
 	return func() { stty("echo") }
 }
 
-// startDetached runs "agentssh daemon" in its own session, logging to logPath.
+// startDetached runs "ostiary daemon" in its own session, logging to logPath.
 func startDetached(logPath string, extra []string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
+	exe = strings.TrimSuffix(exe, " (deleted)") // the binary was replaced by an update
 	c := exec.Command(exe, append([]string{"daemon", "--log", logPath}, extra...)...)
 	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := c.Start(); err != nil {
@@ -44,12 +46,14 @@ func startDetached(logPath string, extra []string) error {
 // systemdUnit starts the daemon with the graphical session: the auth mode
 // is fixed at start, and OS authentication needs the session's display.
 func systemdUnit(exe string) string {
-	return fmt.Sprintf("[Unit]\nDescription=agentssh daemon\nAfter=graphical-session.target\nPartOf=graphical-session.target\n\n"+
+	return fmt.Sprintf("[Unit]\nDescription=ostiary daemon\nAfter=graphical-session.target\nPartOf=graphical-session.target\n\n"+
 		"[Service]\nExecStart=%s daemon\nRestart=on-failure\n\n"+
 		"[Install]\nWantedBy=graphical-session.target\n", exe)
 }
 
-func installService() error {
+// installService installs the autostart. startNow=false (UI toggle) only
+// registers it: the daemon serving the UI is already running.
+func installService(startNow bool) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -57,41 +61,106 @@ func installService() error {
 	home, _ := os.UserHomeDir()
 	switch runtime.GOOS {
 	case "linux":
-		p := filepath.Join(home, ".config", "systemd", "user", "agentssh.service")
+		p := filepath.Join(home, ".config", "systemd", "user", "ostiary.service")
 		// Drop the link of an older unit (WantedBy=default.target).
-		_ = exec.Command("systemctl", "--user", "disable", "agentssh.service").Run()
+		_ = exec.Command("systemctl", "--user", "disable", "ostiary.service").Run()
 		if err := writeFile(p, systemdUnit(exe)); err != nil {
 			return err
 		}
+		installDesktopUser(home, exe)
 		if out, err := exec.Command("systemctl", "--user", "daemon-reload").CombinedOutput(); err != nil {
 			return fmt.Errorf("%v: %s", err, out)
 		}
-		if out, err := exec.Command("systemctl", "--user", "enable", "--now", "agentssh.service").CombinedOutput(); err != nil {
+		enable := []string{"--user", "enable", "ostiary.service"}
+		if startNow {
+			enable = []string{"--user", "enable", "--now", "ostiary.service"}
+		}
+		if out, err := exec.Command("systemctl", enable...).CombinedOutput(); err != nil {
 			return fmt.Errorf("%v: %s", err, out)
 		}
-		// Let the daemon see the graphical session (humanok checks DISPLAY/WAYLAND_DISPLAY).
-		_ = exec.Command("systemctl", "--user", "import-environment", "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY").Run()
-		_ = exec.Command("systemctl", "--user", "restart", "agentssh.service").Run()
+		if startNow {
+			// Let the daemon see the graphical session (humanok checks DISPLAY/WAYLAND_DISPLAY).
+			_ = exec.Command("systemctl", "--user", "import-environment", "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY").Run()
+			_ = exec.Command("systemctl", "--user", "restart", "ostiary.service").Run()
+		}
 	case "darwin":
-		p := filepath.Join(home, "Library", "LaunchAgents", "dev.agentssh.plist")
+		p := filepath.Join(home, "Library", "LaunchAgents", "dev.ostiary.plist")
 		plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>Label</key><string>dev.agentssh</string>
+  <key>Label</key><string>dev.ostiary</string>
   <key>ProgramArguments</key><array><string>%s</string><string>daemon</string></array>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
 </dict></plist>
 `, exe)
 		if err := writeFile(p, plist); err != nil {
 			return err
 		}
-		if out, err := exec.Command("launchctl", "load", "-w", p).CombinedOutput(); err != nil {
-			return fmt.Errorf("%v: %s", err, out)
+		if startNow { // otherwise it loads at next login
+			if out, err := exec.Command("launchctl", "load", "-w", p).CombinedOutput(); err != nil {
+				return fmt.Errorf("%v: %s", err, out)
+			}
 		}
 	default: // unreachable: build tags limit this file to linux and darwin
-		return fmt.Errorf("no service manager support for %s; run 'agentssh daemon' yourself", runtime.GOOS)
+		return fmt.Errorf("no service manager support for %s; run 'ostiary daemon' yourself", runtime.GOOS)
 	}
-	fmt.Println("service installed and started")
+	fmt.Println("service installed")
 	return nil
+}
+
+func unitPath(home string) string {
+	return filepath.Join(home, ".config", "systemd", "user", "ostiary.service")
+}
+
+func plistPath(home string) string {
+	return filepath.Join(home, "Library", "LaunchAgents", "dev.ostiary.plist")
+}
+
+// removeService drops the login autostart; the running daemon is left alone.
+// startService starts the installed autostart service now.
+func startService() error {
+	if runtime.GOOS == "linux" {
+		return runOut("systemctl", "--user", "start", "ostiary.service")
+	}
+	if runOut("launchctl", "kickstart", fmt.Sprintf("gui/%d/dev.ostiary", os.Getuid())) == nil {
+		return nil
+	}
+	home, _ := os.UserHomeDir()
+	return runOut("launchctl", "load", "-w", plistPath(home))
+}
+
+func runOut(name string, args ...string) error {
+	if out, err := exec.Command(name, args...).CombinedOutput(); err != nil {
+		return fmt.Errorf("%s: %v: %s", name, err, out)
+	}
+	return nil
+}
+
+func removeService() error {
+	home, _ := os.UserHomeDir()
+	p := plistPath(home)
+	if runtime.GOOS == "linux" {
+		p = unitPath(home)
+		_ = exec.Command("systemctl", "--user", "disable", "ostiary.service").Run() // not loaded is fine
+	}
+	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if runtime.GOOS == "linux" {
+		_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
+	}
+	return nil
+}
+
+func serviceInstalled() bool {
+	home, _ := os.UserHomeDir()
+	if runtime.GOOS == "linux" {
+		if _, err := os.Stat(unitPath(home)); err != nil {
+			return false
+		}
+		return exec.Command("systemctl", "--user", "is-enabled", "ostiary.service").Run() == nil
+	}
+	_, err := os.Stat(plistPath(home))
+	return err == nil
 }

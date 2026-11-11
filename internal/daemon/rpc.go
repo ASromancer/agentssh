@@ -6,12 +6,12 @@ import (
 	"net/rpc/jsonrpc"
 	"time"
 
-	"github.com/ASromancer/agentssh/internal/hosts"
-	"github.com/ASromancer/agentssh/internal/paths"
-	"github.com/ASromancer/agentssh/internal/policy"
+	"github.com/ASromancer/ostiary/internal/hosts"
+	"github.com/ASromancer/ostiary/internal/paths"
+	"github.com/ASromancer/ostiary/internal/policy"
 )
 
-// agentssh-specific exit codes (spec 6.1).
+// ostiary-specific exit codes (spec 6.1).
 const (
 	CodeBlocked  = 100 // forbidden, profile does not allow, host not allowed
 	CodeDenied   = 101 // denied or approval timed out
@@ -55,7 +55,7 @@ type ExecArgs struct {
 
 type ExecReply struct {
 	Code    int    // CodeBlocked/CodeDenied/CodeNoDaemon, 0 otherwise
-	Msg     string // shown on stderr with the "agentssh:" prefix
+	Msg     string // shown on stderr with the "ostiary:" prefix
 	Pending int    // approval needed: call again with ApprovalID = Pending
 	ID      int
 	Exit    int
@@ -89,9 +89,10 @@ type JobReply struct {
 type StatusReply struct {
 	Locked, UserOnly, Passphrase, VaultMissing bool
 	Pending                                    int
-	Auth                                       string // "os" or "code"
-	AuthNote                                   string // why OS authentication is unavailable
-	UI                                         string // base URL of the web UI, "" when it is not running
+	Auth                                       string      // "os" or "code"
+	AuthNote                                   string      // why OS authentication is unavailable
+	UI                                         string      // base URL of the web UI, "" when it is not running
+	Update                                     *UpdateInfo // a newer release, nil when up to date or unchecked
 }
 
 type UILoginReply struct{ URL string }
@@ -119,9 +120,39 @@ type AdminArgs struct {
 	Host     *hosts.Host
 	PEM      []byte
 	Password []byte
+	Pass     []byte // vault passphrase for init (never logged)
 }
 
 type AdminReply struct{ Out string }
+
+// AgentState is one agent's setup state, for the onboarding guide.
+type AgentState struct {
+	Name      string // claude | codex | gemini | antigravity
+	Detected  bool   // the agent's config dir exists
+	Installed bool   // our hook/plugin is configured
+}
+
+// SetupFuncs are the agent/service helpers that live in package cli.
+type SetupFuncs struct {
+	Agents       func() []AgentState
+	InstallHook  func(agent string) error
+	Autostart    func() bool
+	SetAutostart func(on bool) error
+}
+
+type SetupReply struct {
+	VaultReady    bool // vault file exists
+	Locked        bool
+	Hosts         int
+	Keys          int // keys + passwords; -1 while locked
+	Agents        []AgentState
+	Autostart     bool
+	PolkitMissing bool   // linux only: the polkit policy file is absent
+	Skipped       bool   // the user hid the guide
+	CLIHint       string // macOS .app only: command that puts ostiary on PATH for agents
+}
+
+type SetupSkipArgs struct{ Skip bool }
 
 type KeysReply struct{ Keys []string }
 

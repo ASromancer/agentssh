@@ -6,6 +6,9 @@ on:
   pull_request:
 permissions:
   contents: write
+concurrency: # a new push to a PR supersedes its previous run; tags and main always finish
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   test:
     strategy:
@@ -13,6 +16,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -26,67 +30,181 @@ jobs:
       - name: UI highlight offsets
         if: runner.os == 'Linux'
         run: node internal/ui/testdata/highlight_test.mjs
+      - name: UI error translation
+        if: runner.os == 'Linux'
+        run: node internal/ui/testdata/errors_test.mjs
       - name: e2e against a real OpenSSH server
         if: runner.os != 'Windows'
         run: |
           command -v sshd || sudo apt-get install -y openssh-server
-          go build -tags e2efake -o "$RUNNER_TEMP/agentssh-e2e" .
-          python3 scripts/e2e.py "$RUNNER_TEMP/agentssh-e2e"
-  build-unix-windows:
+          go build -tags e2efake -o "$RUNNER_TEMP/ostiary-e2e" .
+          python3 scripts/e2e.py "$RUNNER_TEMP/ostiary-e2e"
+  build-linux-windows:
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: |
-          for t in linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
-            os=${t%/*}; arch=${t#*/}; ext=""; [ "$os" = windows ] && ext=.exe
-            GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath \
-              -ldflags "-s -w -X github.com/ASromancer/agentssh/internal/cli.Version=${GITHUB_REF_NAME#v}" \
-              -o dist/agentssh-$os-$arch$ext .
+      - name: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then VERSION=${GITHUB_REF_NAME#v}; else VERSION=0.0.0-dev.$(git rev-parse --short HEAD); fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+      - name: build binaries and archives
+        run: |
+          LD="-s -w -X github.com/ASromancer/ostiary/internal/cli.Version=$VERSION"
+          mkdir -p dist
+          for a in amd64 arm64; do
+            GOOS=linux GOARCH=$a CGO_ENABLED=0 go build -trimpath -ldflags "$LD" -o build/linux-$a/ostiary .
+            tar -czf dist/ostiary-linux-$a.tar.gz -C build/linux-$a ostiary -C "$PWD" LICENSE README.md
+            d=build/windows-$a; mkdir -p $d
+            GOOS=windows GOARCH=$a CGO_ENABLED=0 go build -trimpath -ldflags "$LD" -o $d/ostiary.exe .
+            GOOS=windows GOARCH=$a CGO_ENABLED=0 go build -trimpath -ldflags "$LD -H=windowsgui" -o $d/ostiary-app.exe .
+            (cd $d && zip -q "$GITHUB_WORKSPACE/dist/ostiary-windows-$a.zip" ostiary.exe ostiary-app.exe)
           done
+      - name: icons
+        run: |
+          go run ./tools/brandgen -out build/brand
+          cp build/brand/ostiary.ico build/windows-amd64/
+          mkdir -p build/icons
+          for n in 16 32 48 64 128 256 512; do cp internal/brand/png/ostiary-$n.png build/icons/$n.png; done
+      - name: .deb packages
+        run: |
+          GOBIN="$RUNNER_TEMP/nfpm-bin" go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0
+          for a in amd64 arm64; do
+            ARCH=$a "$RUNNER_TEMP/nfpm-bin/nfpm" package -f packaging/linux/nfpm.yaml -p deb -t dist/
+          done
+      - name: smoke-test .deb
+        run: |
+          ls -l dist
+          deb=$(ls dist/ostiary_*_amd64.deb)
+          dpkg-deb -c "$deb" | tee /dev/stderr | grep -e ' ./usr/bin/ostiary' -e 'ostiary.desktop' -e 'ostiary.service' | wc -l | grep -qx 3
+          dpkg-deb -I "$deb" | grep -F "Version: ${VERSION/-/\~}"  # nfpm maps - to ~ (dev sorts before release)
+          sudo apt-get install -y "./$deb"
+          ostiary version | grep -F "$VERSION"
       - name: release binaries contain no e2e test hooks
         run: |
-          for f in dist/*; do
-            n=$(grep -a -c -e AGENTSSH_E2E_HUMANOK -e AGENTSSH_E2E_NOTES "$f" || true)
+          for f in build/linux-*/ostiary build/windows-*/*.exe; do
+            n=$(grep -a -c -e OSTIARY_E2E "$f" || true)
             echo "$f: $n"; [ "$n" = 0 ]
           done
       - uses: actions/upload-artifact@v4
-        with: { name: dist-other, path: dist/ }
+        with: { name: dist-linux-windows, path: dist/ }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: win-installer-input
+          path: |
+            build/windows-amd64/ostiary.exe
+            build/windows-amd64/ostiary-app.exe
+            build/windows-amd64/ostiary.ico
   build-macos:
     needs: test
     runs-on: macos-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: |
+      - name: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then VERSION=${GITHUB_REF_NAME#v}; else VERSION=0.0.0-dev.$(git rev-parse --short HEAD); fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+      - name: build universal binary
+        run: |
           for arch in amd64 arm64; do
             cc_arch=$([ $arch = amd64 ] && echo x86_64 || echo arm64)
             CGO_ENABLED=1 GOOS=darwin GOARCH=$arch CC="clang -arch $cc_arch" go build -trimpath \
-              -ldflags "-s -w -X github.com/ASromancer/agentssh/internal/cli.Version=${GITHUB_REF_NAME#v}" \
-              -o dist/agentssh-darwin-$arch .
+              -ldflags "-s -w -X github.com/ASromancer/ostiary/internal/cli.Version=$VERSION" \
+              -o build/ostiary-darwin-$arch .
           done
+          lipo -create -output build/ostiary-universal build/ostiary-darwin-amd64 build/ostiary-darwin-arm64
+          info=$(lipo -info build/ostiary-universal); echo "$info"
+          echo "$info" | grep -q x86_64 && echo "$info" | grep -q arm64
+      - name: app and dmg
+        run: |
+          go run ./tools/brandgen -out build/brand
+          mkdir -p dist
+          mkdir -p build/mac
+          sh packaging/macos/build-app.sh "$VERSION" build/ostiary-universal build/brand/ostiary.icns build/mac
+          cp build/mac/Ostiary-"$VERSION".dmg dist/
+      - name: smoke-test dmg
+        run: |
+          hdiutil attach -nobrowse -mountpoint /tmp/ost dist/Ostiary-*.dmg
+          trap 'hdiutil detach /tmp/ost' EXIT
+          ostiary_bin=/tmp/ost/Ostiary.app/Contents/MacOS/ostiary
+          "$ostiary_bin" version | grep -F "$VERSION"
+          plutil -lint /tmp/ost/Ostiary.app/Contents/Info.plist
+      - name: archive
+        run: |
+          mkdir build/tar && cp build/ostiary-universal build/tar/ostiary
+          tar -czf dist/ostiary-darwin-universal.tar.gz -C build/tar ostiary
       - name: release binaries contain no e2e test hooks
         run: |
-          for f in dist/*; do
-            n=$(grep -a -c -e AGENTSSH_E2E_HUMANOK -e AGENTSSH_E2E_NOTES "$f" || true)
+          for f in build/ostiary-universal build/ostiary-darwin-*; do
+            n=$(grep -a -c -e OSTIARY_E2E "$f" || true)
             echo "$f: $n"; [ "$n" = 0 ]
           done
       - uses: actions/upload-artifact@v4
         with: { name: dist-macos, path: dist/ }
-  release:
-    needs: [build-unix-windows, build-macos]
-    runs-on: ubuntu-latest
+  build-windows-installer:
+    needs: build-linux-windows
+    runs-on: windows-latest
+    timeout-minutes: 20
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
-        with: { path: dist, merge-multiple: true }
-      - run: cd dist && sha256sum * > SHA256SUMS && ls -l
+        with: { name: win-installer-input, path: win-input }
+      - name: version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then VERSION=${GITHUB_REF_NAME#v}; else VERSION=0.0.0-dev.$(git rev-parse --short HEAD); fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+      - name: build installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+            $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          }
+          & $iscc "/DVersion=$env:VERSION" "/DSrcDir=$PWD\win-input" "/DOutDir=$PWD\dist" packaging\windows\ostiary.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: smoke-test installer
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem dist\Ostiary-Setup-*.exe).FullName
+          # -Wait would also wait for the daemon the silent install relaunches; wait for Setup only.
+          $p = Start-Process $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/MERGETASKS="!autostart,!desktopicon"','/DIR=C:\ost' -PassThru
+          if (-not $p.WaitForExit(300000)) { throw "installer timed out" }
+          if ($p.ExitCode -ne 0) { throw "installer exit code $($p.ExitCode)" }
+          $out = (& C:\ost\ostiary.exe version) -join "`n"
+          Write-Host $out
+          if ($out -notmatch [regex]::Escape($env:VERSION)) { throw "version mismatch" }
+          & C:\ost\ostiary.exe stop   # the relaunched daemon must not outlive the job
       - uses: actions/upload-artifact@v4
-        with: { name: agentssh, path: dist/ }
+        with: { name: dist-windows-installer, path: dist/ }
+  release:
+    needs: [build-linux-windows, build-macos, build-windows-installer]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: dist, pattern: "dist-*", merge-multiple: true }
+      - run: cd dist && sha256sum * > SHA256SUMS && ls -l
+      - if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - if: startsWith(github.ref, 'refs/tags/v')
+        env: { OSTIARY_SIGNING_KEY: "${{ secrets.OSTIARY_SIGNING_KEY }}" }
+        run: |
+          go run ./tools/sign dist/SHA256SUMS
+          go run ./tools/sign -verify dist/SHA256SUMS   # checks with the embedded public key
+      - uses: actions/upload-artifact@v4
+        with: { name: ostiary, path: dist/ }
       - if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}

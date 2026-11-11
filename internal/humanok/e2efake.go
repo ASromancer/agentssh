@@ -9,19 +9,19 @@ import (
 	"strings"
 )
 
-// Test-only confirmer: reads "allow", "deny" or "unavailable" from $AGENTSSH_E2E_HUMANOK
+// Test-only confirmer: reads "allow", "deny" or "unavailable" from $OSTIARY_E2E_HUMANOK
 // and appends each dialog text to that file + ".log". Never in releases.
 type platform struct{}
 
 func (platform) Available() error {
-	if os.Getenv("AGENTSSH_E2E_HUMANOK") == "" {
+	if os.Getenv("OSTIARY_E2E_HUMANOK") == "" {
 		return fmt.Errorf("%w: e2e fake not configured", ErrUnavailable)
 	}
 	return nil
 }
 
 func (platform) Confirm(_ context.Context, msg string) error {
-	p := os.Getenv("AGENTSSH_E2E_HUMANOK")
+	p := os.Getenv("OSTIARY_E2E_HUMANOK")
 	f, err := os.OpenFile(p+".log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err == nil {
 		fmt.Fprintln(f, msg)

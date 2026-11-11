@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ASromancer/agentssh/internal/daemon"
-	"github.com/ASromancer/agentssh/internal/hook"
-	"github.com/ASromancer/agentssh/internal/paths"
-	"github.com/ASromancer/agentssh/internal/policy"
+	"github.com/ASromancer/ostiary/internal/daemon"
+	"github.com/ASromancer/ostiary/internal/hook"
+	"github.com/ASromancer/ostiary/internal/paths"
+	"github.com/ASromancer/ostiary/internal/policy"
 )
 
 // The text helpers below are shared by the CLI and the MCP server so agents
@@ -21,7 +21,7 @@ import (
 
 func hostsText(hs []daemon.HostInfo) string {
 	if len(hs) == 0 {
-		return "no hosts available to agents here (the user enables them with 'agentssh host edit <name> --agent')\n"
+		return "no hosts available to agents here (the user enables them with 'ostiary host edit <name> --agent')\n"
 	}
 	var b strings.Builder
 	for _, h := range hs {
@@ -39,7 +39,7 @@ func transferText(host, kind string, r daemon.ExecReply) string {
 }
 
 func jobStartText(host string, r daemon.ExecReply) string {
-	return fmt.Sprintf("%s job started level=%s id=%d (agentssh job tail %d)\n", host, r.Level, r.ID, r.ID)
+	return fmt.Sprintf("%s job started level=%s id=%d (ostiary job tail %d)\n", host, r.Level, r.ID, r.ID)
 }
 
 func jobTailText(id int, r daemon.JobReply) string {
@@ -128,7 +128,7 @@ func execute(a daemon.ExecArgs) (daemon.ExecReply, int) {
 			}
 			return r, -1
 		}
-		fmt.Fprintf(os.Stderr, "agentssh: waiting approval #%d — run 'agentssh approve' in another terminal\n", r.Pending)
+		fmt.Fprintf(os.Stderr, "ostiary: waiting approval #%d — run 'ostiary approve' in another terminal\n", r.Pending)
 		a.ApprovalID = r.Pending
 	}
 }
@@ -136,7 +136,7 @@ func execute(a daemon.ExecArgs) (daemon.ExecReply, int) {
 // finish prints a transport error and returns the remote exit code.
 func finish(r daemon.ExecReply) int {
 	if r.Msg != "" {
-		fmt.Fprintf(os.Stderr, "agentssh: %s\n", r.Msg)
+		fmt.Fprintf(os.Stderr, "ostiary: %s\n", r.Msg)
 	}
 	return r.Exit
 }
@@ -150,7 +150,7 @@ func cmdRun(args []string) int {
 		return 2
 	}
 	if len(pos) != 2 {
-		return errf(2, `usage: agentssh run <host> "<cmd>" (quote the command as one argument)`)
+		return errf(2, `usage: ostiary run <host> "<cmd>" (quote the command as one argument)`)
 	}
 	r, code := execute(daemon.ExecArgs{Kind: "run", Host: pos[0], Cmd: pos[1], Timeout: *timeout})
 	if code >= 0 {
@@ -174,7 +174,7 @@ func cmdOut(args []string) int {
 		return 2
 	}
 	if len(pos) != 1 {
-		return errf(2, "usage: agentssh out <id> [--grep <regexp>] [--range a:b]")
+		return errf(2, "usage: ostiary out <id> [--grep <regexp>] [--range a:b]")
 	}
 	id, err := strconv.Atoi(pos[0])
 	if err != nil {
@@ -199,7 +199,7 @@ func transfer(kind string, args []string) int {
 		return 2
 	}
 	if len(pos) != 2 {
-		return errf(2, "usage: agentssh get <host>:<remote> <local> | agentssh put <local> <host>:<remote>")
+		return errf(2, "usage: ostiary get <host>:<remote> <local> | ostiary put <local> <host>:<remote>")
 	}
 	remoteArg, local := pos[0], pos[1]
 	if kind == "put" {
@@ -228,7 +228,7 @@ func cmdPut(args []string) int { return transfer("put", args) }
 
 func cmdJob(args []string) int {
 	if len(args) == 0 {
-		return errf(2, "usage: agentssh job start|tail|kill ...")
+		return errf(2, "usage: ostiary job start|tail|kill ...")
 	}
 	sub := args[0]
 	fs := newFlags("job " + sub)
@@ -240,7 +240,7 @@ func cmdJob(args []string) int {
 	switch sub {
 	case "start":
 		if len(pos) != 2 {
-			return errf(2, `usage: agentssh job start <host> "<cmd>"`)
+			return errf(2, `usage: ostiary job start <host> "<cmd>"`)
 		}
 		r, code := execute(daemon.ExecArgs{Kind: "job", Host: pos[0], Cmd: pos[1]})
 		if code >= 0 {
@@ -253,7 +253,7 @@ func cmdJob(args []string) int {
 		return 0
 	case "tail", "kill":
 		if len(pos) != 1 {
-			return errf(2, "usage: agentssh job %s <id>", sub)
+			return errf(2, "usage: ostiary job %s <id>", sub)
 		}
 		id, err := strconv.Atoi(pos[0])
 		if err != nil {
@@ -287,7 +287,7 @@ func cmdExplain(args []string) int {
 		return 2
 	}
 	if len(pos) != 1 {
-		return errf(2, `usage: agentssh explain "<cmd>" [--host <host>]`)
+		return errf(2, `usage: ostiary explain "<cmd>" [--host <host>]`)
 	}
 	r, err := explainCmd(env(), pos[0], *host)
 	if err != nil {
@@ -317,7 +317,7 @@ func daemonExplain(host, cmd, cwd string) (string, error) {
 
 func cmdHook(args []string) int {
 	if len(args) != 1 || !slices.Contains(hook.Agents, args[0]) {
-		return errf(2, "usage: agentssh hook %s (reads a pre-tool event on stdin)", strings.Join(hook.Agents, "|"))
+		return errf(2, "usage: ostiary hook %s (reads a pre-tool event on stdin)", strings.Join(hook.Agents, "|"))
 	}
 	protected := []string{paths.Config(), paths.State()}
 	if home, err := os.UserHomeDir(); err == nil {
@@ -325,7 +325,7 @@ func cmdHook(args []string) int {
 	}
 	if err := hook.Run(args[0], os.Stdin, os.Stdout, protected, daemonExplain); err != nil {
 		// Never break the agent on a malformed event: no output = normal flow.
-		fmt.Fprintf(os.Stderr, "agentssh hook: %v\n", err)
+		fmt.Fprintf(os.Stderr, "ostiary hook: %v\n", err)
 	}
 	return 0
 }

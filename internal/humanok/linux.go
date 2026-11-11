@@ -56,7 +56,7 @@ func pkcheckCmd(ctx context.Context, pk string, args ...string) *exec.Cmd {
 func (platform) Available() error {
 	policy, err := os.ReadFile(PolicyPath)
 	if err != nil {
-		return fmt.Errorf("%w: polkit action not installed (run: sudo agentssh install-polkit)", ErrUnavailable)
+		return fmt.Errorf("%w: polkit action not installed (run: sudo ostiary install-polkit)", ErrUnavailable)
 	}
 	if _, err := TrustedBinary(pkcheckPaths...); err != nil {
 		return fmt.Errorf("%w: pkcheck: %v (install polkit)", ErrUnavailable, err)
@@ -73,7 +73,7 @@ func (platform) Available() error {
 // local display where the polkit agent can show its dialog.
 func setupProblem(policy []byte, user string, getenv func(string) string, exists func(string) bool) error {
 	if user == "" || !strings.Contains(string(policy), "unix-user:"+user+"<") {
-		return fmt.Errorf("%w: polkit action belongs to another user (run sudo agentssh install-polkit as yourself)", ErrUnavailable)
+		return fmt.Errorf("%w: polkit action belongs to another user (run sudo ostiary install-polkit as yourself)", ErrUnavailable)
 	}
 	if w := getenv("WAYLAND_DISPLAY"); w != "" {
 		p := w

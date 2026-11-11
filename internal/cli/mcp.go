@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ASromancer/agentssh/internal/daemon"
+	"github.com/ASromancer/ostiary/internal/daemon"
 )
 
 // MCP: a stdio server (newline-delimited JSON-RPC 2.0) exposing the agent
@@ -26,9 +26,9 @@ var mcpVersions = []string{"2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05
 // ~60 s tool timeout of common MCP clients.
 const approvalPoll = 45 * time.Second
 
-const mcpInstructions = `agentssh runs shell commands on remote servers for you without exposing SSH keys.
+const mcpInstructions = `ostiary runs shell commands on remote servers for you without exposing SSH keys.
 Start with the hosts tool. Every command is classified read/mutate/destructive/forbidden.
-Destructive commands need the human to approve in a terminal ('agentssh approve'); the run tool then
+Destructive commands need the human to approve in a terminal ('ostiary approve'); the run tool then
 returns an approval id: call run again with the same host, command and approval_id until it finishes.
 If a result says the request was denied or blocked, stop and ask the user; never retry another way.
 No PTY: use 'top -bn1', 'cat', 'tail -n' instead of interactive programs. Prefer the output tool with
@@ -62,7 +62,7 @@ type rpcError struct {
 
 func cmdMCP(args []string) int {
 	fs := newFlags("mcp")
-	cwd := fs.String("cwd", "", "directory used to find .agentssh.toml (default: current directory)")
+	cwd := fs.String("cwd", "", "directory used to find .ostiary.toml (default: current directory)")
 	if _, err := parse(fs, args); err != nil {
 		return 2
 	}
@@ -135,7 +135,7 @@ func (s *mcpServer) handle(method string, params json.RawMessage) (any, *rpcErro
 		return map[string]any{
 			"protocolVersion": v,
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
-			"serverInfo":      map[string]any{"name": "agentssh", "version": Version},
+			"serverInfo":      map[string]any{"name": "ostiary", "version": Version},
 			"instructions":    mcpInstructions,
 		}, nil
 	case "ping":
@@ -185,7 +185,7 @@ var mcpTools = []any{
 			"grep":  str("only lines matching this regexp, with line numbers"),
 			"range": str("line range a:b, 1-based inclusive, either side may be empty"),
 		}, "id"), true, false),
-	tool("explain", "Classify a command", "How agentssh classifies a command and what it would do on a host. Runs nothing.",
+	tool("explain", "Classify a command", "How ostiary classifies a command and what it would do on a host. Runs nothing.",
 		obj(map[string]any{"command": str("shell command"), "host": str("optional host to apply its profile and rules")}, "command"), true, false),
 	tool("get", "Download a file", "Copy a remote file (max 50 MB) to a local absolute path.",
 		obj(map[string]any{"host": str("host"), "remote_path": str("remote file"), "local_path": str("local absolute path"),
@@ -205,7 +205,7 @@ func argStr(a map[string]any, k string) string { s, _ := a[k].(string); return s
 func argInt(a map[string]any, k string) int    { f, _ := a[k].(float64); return int(f) }
 
 func failText(code int, msg string) string {
-	return fmt.Sprintf("agentssh: %s\nagentssh: %s (code %d)", msg, guidance[code], code)
+	return fmt.Sprintf("ostiary: %s\nostiary: %s (code %d)", msg, guidance[code], code)
 }
 
 // call runs one tool and returns its text and whether it is an error.
@@ -280,7 +280,7 @@ func (s *mcpServer) call(name string, a map[string]any) (string, bool) {
 	}
 	switch {
 	case r.Pending != 0 && x.ApprovalID == 0:
-		return fmt.Sprintf("approval required (#%d): this is %s. The user must run 'agentssh approve' in a terminal and "+
+		return fmt.Sprintf("approval required (#%d): this is %s. The user must run 'ostiary approve' in a terminal and "+
 			"enter the code from the desktop notification. Tell the user, then call %s again with the same arguments "+
 			"and approval_id=%d.", r.Pending, r.Level, name, r.Pending), false
 	case r.Pending != 0:
@@ -301,7 +301,7 @@ func (s *mcpServer) call(name string, a map[string]any) (string, bool) {
 		}
 	}
 	if r.Msg != "" {
-		text += "agentssh: " + r.Msg + "\n"
+		text += "ostiary: " + r.Msg + "\n"
 	}
 	return text, r.Exit != 0 && x.Kind != "run"
 }

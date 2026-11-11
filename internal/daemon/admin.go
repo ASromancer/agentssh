@@ -6,16 +6,18 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/ASromancer/agentssh/internal/audit"
-	"github.com/ASromancer/agentssh/internal/hosts"
-	"github.com/ASromancer/agentssh/internal/paths"
-	"github.com/ASromancer/agentssh/internal/sshconn"
-	"github.com/ASromancer/agentssh/internal/vault"
+	"github.com/ASromancer/ostiary/internal/audit"
+	"github.com/ASromancer/ostiary/internal/hosts"
+	"github.com/ASromancer/ostiary/internal/paths"
+	"github.com/ASromancer/ostiary/internal/sshconn"
+	"github.com/ASromancer/ostiary/internal/vault"
 )
 
 func vaultSalt() ([]byte, error) { return vault.Salt(paths.Vault()) }
@@ -24,6 +26,7 @@ func vaultSalt() ([]byte, error) { return vault.Salt(paths.Vault()) }
 var adminOps = map[string]bool{
 	"reload": true, "host-set": true, "host-rm": true, "trust": true,
 	"key-gen": true, "key-import": true, "key-rm": true, "key-export": true,
+	"init": true, "hooks": true, "autostart": true, "upgrade": true,
 }
 
 func (s *Service) Unlock(a *UnlockArgs, _ *Empty) error {
@@ -37,7 +40,7 @@ func (s *Service) Unlock(a *UnlockArgs, _ *Empty) error {
 		auth = "none"
 		if s.d.osAuth() {
 			auth = "os"
-			if err := s.d.confirm("unlock the agentssh vault"); err != nil {
+			if err := s.d.confirm("unlock the ostiary vault"); err != nil {
 				s.d.log.Write(audit.Entry{Kind: "admin", Cmd: "unlock", Auth: auth, Decision: "denied", Note: err.Error()})
 				return err
 			}
@@ -56,6 +59,44 @@ func (s *Service) Unlock(a *UnlockArgs, _ *Empty) error {
 func (s *Service) Begin(a *BeginArgs, r *BeginReply) error {
 	if !adminOps[a.Op] {
 		return fmt.Errorf("unknown admin op %q", a.Op)
+	}
+	switch a.Op {
+	case "reload", "host-set", "host-rm", "key-gen", "key-import", "key-rm", "key-export":
+		// Fail before a ticket or dialog exists: Admin would reject these anyway, after the human authenticated.
+		s.d.mu.Lock()
+		locked := s.d.data == nil
+		s.d.mu.Unlock()
+		if locked {
+			return errors.New("vault is locked; run 'ostiary unlock' first")
+		}
+	case "init":
+		if _, err := os.Stat(paths.Vault()); err == nil {
+			return errors.New("already initialized")
+		}
+		if a.Name != "keyring" && a.Name != "passphrase" {
+			return fmt.Errorf("init mode must be keyring or passphrase, not %q", a.Name)
+		}
+	case "upgrade":
+		s.d.mu.Lock()
+		u := s.d.update
+		s.d.mu.Unlock()
+		if u == nil || a.Name != u.Version {
+			return fmt.Errorf("no update to version %q is available", a.Name)
+		}
+	case "autostart":
+		if a.Name != "on" && a.Name != "off" {
+			return fmt.Errorf("autostart must be on or off, not %q", a.Name)
+		}
+	case "hooks":
+		known := false
+		if s.d.setup.Agents != nil {
+			for _, ag := range s.d.setup.Agents() {
+				known = known || ag.Name == a.Name
+			}
+		}
+		if !known {
+			return fmt.Errorf("unknown agent %q", a.Name)
+		}
 	}
 	var data any
 	detail := a.Name
@@ -81,6 +122,7 @@ func (s *Service) Begin(a *BeginArgs, r *BeginReply) error {
 
 func (s *Service) Admin(a *AdminArgs, r *AdminReply) error {
 	d := s.d
+	defer clear(a.Pass)
 	op := a.Op + " " + a.Name
 	e := audit.Entry{Kind: "admin", Cmd: strings.TrimSpace(op), Auth: "code"}
 	var data any
@@ -114,6 +156,17 @@ func (s *Service) Admin(a *AdminArgs, r *AdminReply) error {
 // every field that takes effect.
 func (d *Daemon) adminMessage(a *AdminArgs, data any) string {
 	switch a.Op {
+	case "init":
+		return "create the Ostiary vault (" + a.Name + ")"
+	case "upgrade":
+		return d.upgradeMessage(a.Name)
+	case "hooks":
+		return "install the Ostiary hook for " + a.Name
+	case "autostart":
+		if a.Name == "on" {
+			return "start Ostiary automatically at login"
+		}
+		return "stop starting Ostiary at login"
 	case "trust":
 		if k, ok := data.(ssh.PublicKey); ok {
 			return fmt.Sprintf("trust host key %s for %s", ssh.FingerprintSHA256(k), a.Name)
@@ -130,11 +183,61 @@ func (d *Daemon) adminMessage(a *AdminArgs, data any) string {
 				a.Name, h.User, h.Addr(), h.EffectiveProfile(), h.Agent, key, h.Allow, h.Deny)
 		}
 	}
-	return strings.TrimSpace("agentssh " + a.Op + " " + a.Name)
+	return strings.TrimSpace("ostiary " + a.Op + " " + a.Name)
 }
 
 func (d *Daemon) admin(a *AdminArgs, data any, r *AdminReply) error {
 	var authNow error
+	switch a.Op {
+	case "init":
+		key, salt := vault.NewKey(), []byte(nil)
+		if a.Name == "passphrase" {
+			if len(a.Pass) < 8 {
+				return errors.New("use at least 8 characters for the passphrase")
+			}
+			salt = vault.NewSalt()
+			key = vault.DeriveKey(a.Pass, salt)
+			if err := InitVault(key, salt); err != nil {
+				return err
+			}
+		} else if err := InitVaultKeyring(key); errors.Is(err, ErrInitialized) {
+			return err
+		} else if err != nil {
+			return fmt.Errorf("OS keyring unavailable (%v); choose a passphrase instead", err)
+		}
+		r.Out = "vault created: " + paths.Vault()
+		err := d.loadConfig()
+		if err == nil {
+			err = d.unlock(key, salt)
+		}
+		if err != nil { // the vault exists; the UI will show it locked
+			r.Out += "; unlock it to continue (" + err.Error() + ")"
+		}
+		return nil
+	case "hooks":
+		if d.setup.InstallHook == nil {
+			return errors.New("agent setup is not available in this daemon")
+		}
+		if err := d.setup.InstallHook(a.Name); err != nil {
+			return err
+		}
+		r.Out = "installed the Ostiary hook for " + a.Name
+		return nil
+	case "upgrade":
+		return d.upgrade(a.Name, r)
+	case "autostart":
+		if d.setup.SetAutostart == nil {
+			return errors.New("autostart is not available in this daemon")
+		}
+		if err := d.setup.SetAutostart(a.Name == "on"); err != nil {
+			return err
+		}
+		d.autoMu.Lock()
+		d.autoAt = time.Time{}
+		d.autoMu.Unlock()
+		r.Out = map[string]string{"on": "Ostiary will start at login", "off": "Ostiary will no longer start at login"}[a.Name]
+		return nil
+	}
 	if a.Op == "reload" {
 		if err := d.loadConfig(); err != nil {
 			return err
@@ -159,7 +262,7 @@ func (d *Daemon) admin(a *AdminArgs, data any, r *AdminReply) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.data == nil {
-		return errors.New("vault is locked; run 'agentssh unlock' first")
+		return errors.New("vault is locked; run 'ostiary unlock' first")
 	}
 	switch a.Op {
 	case "reload":
@@ -169,11 +272,11 @@ func (d *Daemon) admin(a *AdminArgs, data any, r *AdminReply) error {
 		if err := d.authProblem(); err != nil {
 			r.Out = fmt.Sprintf("reloaded %d hosts; approvals use codes (%v)", len(d.cfg.Hosts), err)
 		} else if authNow != nil {
-			r.Out += fmt.Sprintf(" (the dialog cannot be shown right now: %v; run 'agentssh doctor')", authNow)
+			r.Out += fmt.Sprintf(" (the dialog cannot be shown right now: %v; run 'ostiary doctor')", authNow)
 		}
 	case "host-set", "host-rm":
 		if d.userOnly || ConfigHash() != d.data.ConfigHash {
-			return errors.New("hosts.toml or rules.toml changed on disk; review the change and run 'agentssh reload' first")
+			return errors.New("hosts.toml or rules.toml changed on disk; review the change and run 'ostiary reload' first")
 		}
 		cfg := &hosts.Config{Hosts: map[string]*hosts.Host{}}
 		for k, v := range d.cfg.Hosts {
@@ -207,7 +310,7 @@ func (d *Daemon) admin(a *AdminArgs, data any, r *AdminReply) error {
 		if err != nil {
 			return err
 		}
-		block, err := ssh.MarshalPrivateKey(priv, "agentssh-"+a.Name)
+		block, err := ssh.MarshalPrivateKey(priv, "ostiary-"+a.Name)
 		if err != nil {
 			return err
 		}
@@ -216,7 +319,7 @@ func (d *Daemon) admin(a *AdminArgs, data any, r *AdminReply) error {
 			return err
 		}
 		d.data.Keys[a.Name] = pem.EncodeToMemory(block)
-		r.Out = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sp))) + " agentssh-" + a.Name
+		r.Out = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sp))) + " ostiary-" + a.Name
 	case "key-import":
 		if len(a.PEM) > 0 {
 			signer, err := ssh.ParsePrivateKey(a.PEM)

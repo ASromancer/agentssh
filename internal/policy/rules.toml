@@ -2,7 +2,7 @@
 # A pattern matches the normalized command line ("name arg1 arg2 ...");
 # "*" matches anything (including spaces) and every pattern implicitly
 # allows trailing arguments. Commands matching no rule are "mutate".
-# Override or extend in ~/.config/agentssh/rules.toml (same format; user
+# Override or extend in ~/.config/ostiary/rules.toml (same format; user
 # rules are checked before these).
 
 [[rule]]

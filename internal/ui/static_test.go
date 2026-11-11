@@ -23,13 +23,16 @@ func TestStaticPage(t *testing.T) {
 			t.Errorf("index.html lacks view %s", v)
 		}
 	}
+	if !strings.Contains(page, `data-view="setup"`) {
+		t.Error("index.html lacks view setup")
+	}
 	if regexp.MustCompile(`<script>|<script[^>]*>[^<]*[^<\s]`).MatchString(page) || strings.Contains(page, "<style") ||
 		regexp.MustCompile(`\sstyle\s*=`).MatchString(page) || regexp.MustCompile(`\son[a-z]+\s*=`).MatchString(page) {
 		t.Error("inline script/style/handlers violate the CSP")
 	}
 	js := get("/app.js")
 	for _, want := range []string{"/api/pending", "/api/decide", "/api/admin/begin", "/api/admin/commit", "/api/audit", "/api/hosts",
-		"/api/keys", "/api/knownhosts", "/api/unlock", "/api/lock", "/api/doctor", "/api/out/", "/events"} {
+		"/api/keys", "/api/knownhosts", "/api/unlock", "/api/lock", "/api/doctor", "/api/setup", "/api/setup/skip", "/api/out/", "/events"} {
 		if !strings.Contains(js, want) {
 			t.Errorf("app.js lacks %s", want)
 		}

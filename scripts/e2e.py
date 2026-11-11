@@ -1,37 +1,38 @@
 #!/usr/bin/env python3
-"""End-to-end test: the real agentssh binary against a real OpenSSH sshd.
+"""End-to-end test: the real ostiary binary against a real OpenSSH sshd.
 
 Linux/macOS only. Everything lives in a temp dir (HOME, XDG dirs, sshd), so
 it never touches your keyring, ~/.claude or services. init runs in
 passphrase mode.
 
 The binary must be built with -tags e2efake: its notifier appends each
-notification to $AGENTSSH_E2E_NOTES (where this script reads the approval
-codes) and its OS dialog is answered through $AGENTSSH_E2E_HUMANOK. The
-first part runs in code mode (AGENTSSH_OS_AUTH=0), the last part in OS mode.
+notification to $OSTIARY_E2E_NOTES (where this script reads the approval
+codes) and its OS dialog is answered through $OSTIARY_E2E_HUMANOK. The
+first part runs in code mode (OSTIARY_OS_AUTH=0), the last part in OS mode.
 
-usage: go build -tags e2efake -o /tmp/agentssh-e2e . && python3 scripts/e2e.py /tmp/agentssh-e2e
+usage: go build -tags e2efake -o /tmp/ostiary-e2e . && python3 scripts/e2e.py /tmp/ostiary-e2e
 """
-import fcntl, http.client, json, os, re, select, shutil, signal, socket, subprocess, sys, tempfile, termios, time, urllib.parse
+import fcntl, http.client, http.server, json, threading, os, re, select, shutil, signal, socket, subprocess, sys, tempfile, termios, time, urllib.parse
 
 BIN = os.path.abspath(sys.argv[1])  # built with -tags e2efake
 SSHD = shutil.which("sshd") or "/usr/sbin/sshd"
-TMP = tempfile.mkdtemp(prefix="agentssh-e2e-")
+TMP = tempfile.mkdtemp(prefix="ostiary-e2e-")
 HOME = os.path.join(TMP, "home")
 PASS = "correct horse battery"
 os.makedirs(HOME)
 
 ENV = {k: v for k, v in os.environ.items() if k not in ("DISPLAY", "WAYLAND_DISPLAY", "CLAUDECODE")}
 ENV.update(HOME=HOME, XDG_CONFIG_HOME=f"{HOME}/.config", XDG_STATE_HOME=f"{HOME}/.local/state",
-           XDG_RUNTIME_DIR=f"{TMP}/run", AGENTSSH_SOCKET=f"{TMP}/s.sock",
+           XDG_RUNTIME_DIR=f"{TMP}/run", OSTIARY_SOCKET=f"{TMP}/s.sock",
            DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent", TERM="dumb",
            CLAUDECODE="1",  # agent calls come from Claude Code unless a test says otherwise
-           AGENTSSH_OS_AUTH="0")  # code mode first; the OS-mode part turns it on
+           OSTIARY_OS_AUTH="0")  # code mode first; the OS-mode part turns it on
 os.makedirs(ENV["XDG_RUNTIME_DIR"], mode=0o700)
 NOTES = os.path.join(TMP, "notifications.log")
-ENV["AGENTSSH_E2E_NOTES"] = NOTES
+ENV["OSTIARY_E2E_NOTES"] = NOTES
 
-ENV["AGENTSSH_NO_TRAY"] = "1"
+ENV["OSTIARY_NO_TRAY"] = "1"
+ENV["OSTIARY_NO_UPDATE_CHECK"] = "1"  # the daemon must never reach api.github.com from CI
 
 
 class UI:
@@ -230,17 +231,17 @@ def main():
         settings = json.load(open(f"{HOME}/.claude/settings.json"))
         check("hook claude" in json.dumps(settings) and "Bash(ssh:*)" in settings["permissions"]["deny"],
               "init installs the Claude hook and ssh deny rules")
-        check(os.path.exists(f"{HOME}/.claude/skills/agentssh/SKILL.md"), "init installs the skill")
-        check("hook codex" in open(f"{HOME}/.codex/hooks.json").read() and os.path.exists(f"{HOME}/.codex/rules/agentssh.rules"),
+        check(os.path.exists(f"{HOME}/.claude/skills/ostiary/SKILL.md"), "init installs the skill")
+        check("hook codex" in open(f"{HOME}/.codex/hooks.json").read() and os.path.exists(f"{HOME}/.codex/rules/ostiary.rules"),
               "init installs the Codex hook and rules")
 
         rc, _, err = run("hosts")
-        check(rc == 102 and err.startswith("agentssh:"), "agent gets 102 while the daemon is down")
+        check(rc == 102 and err.startswith("ostiary:"), "agent gets 102 while the daemon is down")
 
         rc, out, _ = run("daemon", "--detach")
         daemon_pid = int(re.search(r"pid (\d+)", out).group(1))
         for _ in range(50):
-            if os.path.exists(ENV["AGENTSSH_SOCKET"]):
+            if os.path.exists(ENV["OSTIARY_SOCKET"]):
                 break
             time.sleep(0.1)
         check(rc == 0, "daemon --detach starts")
@@ -279,7 +280,7 @@ def main():
 
         codex_env = {k: v for k, v in ENV.items() if k != "CLAUDECODE"}
         codex_env["CODEX_SANDBOX"] = "seatbelt"
-        p = subprocess.Popen([BIN, "run", "e2e", "touch /tmp/x-agentssh-e2e"], env=codex_env, stdin=subprocess.DEVNULL,
+        p = subprocess.Popen([BIN, "run", "e2e", "touch /tmp/x-ostiary-e2e"], env=codex_env, stdin=subprocess.DEVNULL,
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         line = p.stderr.readline()
         p.kill()
@@ -298,7 +299,7 @@ def main():
 
         rc, out, _ = run("run", "e2e", "seq 1 200")
         oid = re.search(r"id=(\d+)", out).group(1)
-        check(rc == 0 and f"120 lines omitted, full: agentssh out {oid}" in out, "long output summarized", out)
+        check(rc == 0 and f"120 lines omitted, full: ostiary out {oid}" in out, "long output summarized", out)
         rc, out, _ = run("out", oid, "--grep", "^15[0-2]$")
         check(out == "150: 150\n151: 151\n152: 152\n", "out --grep", out)
         rc, out, _ = run("out", oid, "--range", "199:")
@@ -355,7 +356,7 @@ def main():
         check(rc == 0 and open(f"{remote}/up.txt").read() == "payload\n", "put", out + err)
         rc, out, err = run("get", f"e2e:{remote}/up.txt", os.path.join(TMP, "down.txt"))
         check(rc == 0 and open(os.path.join(TMP, "down.txt")).read() == "payload\n", "get", out + err)
-        rc, _, err = run("put", f"{HOME}/.config/agentssh/vault.bin", f"e2e:{remote}/v")
+        rc, _, err = run("put", f"{HOME}/.config/ostiary/vault.bin", f"e2e:{remote}/v")
         check(rc == 100, "uploading the vault is blocked", err)
 
         rc, out, _ = run("job", "start", "e2e", "for i in 1 2 3; do echo tick $i; sleep 0.2; done")
@@ -378,15 +379,15 @@ def main():
                                input=json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": TMP}))
             return json.loads(p.stdout)["hookSpecificOutput"]["permissionDecision"] if p.stdout else ""
         check(hook("ssh e2e uptime") == "deny", "hook denies direct ssh")
-        check(hook('agentssh run e2e "uptime"') == "allow", "hook allows read via the daemon")
-        check(hook('agentssh run e2e "systemctl restart nginx"') == "ask", "hook asks for mutate on standard")
-        check(hook('agentssh run e2e "cat /etc/shadow"') == "deny", "hook denies forbidden")
-        check(hook("agentssh approve") == "deny", "hook denies human-only commands")
+        check(hook('ostiary run e2e "uptime"') == "allow", "hook allows read via the daemon")
+        check(hook('ostiary run e2e "systemctl restart nginx"') == "ask", "hook asks for mutate on standard")
+        check(hook('ostiary run e2e "cat /etc/shadow"') == "deny", "hook denies forbidden")
+        check(hook("ostiary approve") == "deny", "hook denies human-only commands")
         p = subprocess.run([BIN, "hook", "gemini"], env=ENV, capture_output=True, text=True, input=json.dumps(
             {"hook_event_name": "BeforeTool", "tool_name": "run_shell_command", "cwd": TMP, "tool_input": {"command": "scp a e2e:/tmp"}}))
         check(json.loads(p.stdout)["decision"] == "deny", "gemini hook denies scp")
         p = subprocess.run([BIN, "hook", "antigravity"], env=ENV, capture_output=True, text=True, input=json.dumps(
-            {"toolCall": {"name": "run_command", "args": {"CommandLine": 'agentssh run e2e "uptime"', "Cwd": TMP}}}))
+            {"toolCall": {"name": "run_command", "args": {"CommandLine": 'ostiary run e2e "uptime"', "Cwd": TMP}}}))
         check(json.loads(p.stdout)["decision"] == "allow", "antigravity hook allows a read via the daemon")
 
         # MCP server over stdio, same daemon and policy.
@@ -400,7 +401,7 @@ def main():
             return r["content"][0]["text"], r["isError"]
         init = rpc(1, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "e2e", "version": "0"}})
         mcp.stdin.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n')
-        check(init["result"]["serverInfo"]["name"] == "agentssh" and len(rpc(2, "tools/list")["result"]["tools"]) == 9,
+        check(init["result"]["serverInfo"]["name"] == "ostiary" and len(rpc(2, "tools/list")["result"]["tools"]) == 9,
               "mcp initialize + tools/list")
         text, err = tool(3, "run", host="e2e", command="echo via-mcp")
         check(not err and "level=read" in text and "via-mcp" in text, "mcp run read", text)
@@ -432,7 +433,7 @@ def main():
         check("ok    daemon is running" in out and "ok    desktop notification sent" in out, "doctor", out)
 
         # Config edited behind the daemon's back.
-        with open(f"{HOME}/.config/agentssh/hosts.toml", "a") as f:
+        with open(f"{HOME}/.config/ostiary/hosts.toml", "a") as f:
             f.write('\n[hosts.sneaky]\nhost = "1.2.3.4"\nagent = true\n')
         run("lock")
         t = Tty("unlock")
@@ -462,12 +463,12 @@ def main():
         time.sleep(0.5)
         gate = os.path.join(TMP, "humanok")
         open(gate, "w").write("deny")
-        ENV["AGENTSSH_E2E_HUMANOK"] = gate
-        ENV["AGENTSSH_OS_AUTH"] = "1"  # OS mode on every OS for the fake confirmer
+        ENV["OSTIARY_E2E_HUMANOK"] = gate
+        ENV["OSTIARY_OS_AUTH"] = "1"  # OS mode on every OS for the fake confirmer
         out = subprocess.run([BIN, "daemon", "--detach"], env=ENV, capture_output=True, text=True).stdout
         daemon_pid = int(re.search(r"pid (\d+)", out).group(1))
         for _ in range(50):
-            if os.path.exists(ENV["AGENTSSH_SOCKET"]):
+            if os.path.exists(ENV["OSTIARY_SOCKET"]):
                 break
             time.sleep(0.1)
         t = Tty("unlock")
@@ -477,9 +478,9 @@ def main():
         rc, out, _ = run("doctor")
         check("approvals use OS authentication" in out, "doctor reports OS authentication", out)
         ui = UI()
-        check(ui.login() == 303 and ui.cookie and ui.cookie.startswith("agentssh="), "UI login exchanges the nonce for a cookie")
+        check(ui.login() == 303 and ui.cookie and ui.cookie.startswith("ostiary="), "UI login exchanges the nonce for a cookie")
         check(ui.req("GET", ui.loginpath(), cookie=False)[0] == 401, "a login link works only once")
-        check(not os.path.exists(os.path.join(HOME, ".local", "state", "agentssh", "ui.url")), "no ui.url file is written")
+        check(not os.path.exists(os.path.join(HOME, ".local", "state", "ostiary", "ui.url")), "no ui.url file is written")
         check(ui.req("GET", "/api/pending", cookie=False)[0] == 401, "UI refuses requests without the cookie")
         check(ui.req("GET", "/api/pending", host="evil.example")[0] == 421, "UI refuses a foreign Host header")
         check(ui.req("POST", "/api/lock", origin="http://evil.example")[0] == 403, "UI refuses a cross-origin POST")
@@ -554,22 +555,40 @@ def main():
         t.expect(r"DESTRUCTIVE")
         t.expect(r"\[y\] once")
         t.send("y")
-        t.expect("AGENTSSH_OS_AUTH=0")
+        t.expect("OSTIARY_OS_AUTH=0")
         t.expect(r"\[y\] once")
         t.send("n")
         t.expect("denied")
         out, err = agent.communicate(timeout=30)
         check(agent.returncode == 101 and os.path.exists(victim5),
-              "OS dialog breaks: error names AGENTSSH_OS_AUTH=0, deny still works", out + err)
+              "OS dialog breaks: error names OSTIARY_OS_AUTH=0, deny still works", out + err)
         t.p.kill()
         rc, out, _ = run("doctor")
         check("approvals use OS authentication" in out, "a broken dialog does not switch to codes", out)
-        ENV.pop("AGENTSSH_E2E_HUMANOK")
+        ENV.pop("OSTIARY_E2E_HUMANOK")
+        # upgrade --check against a fake release server (never the real network)
+        class Rel(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = json.dumps({"tag_name": "v99.0.0", "html_url": "https://example.invalid/r", "body": "", "assets": []}).encode()
+                self.send_response(200 if self.path.endswith("/releases/latest") else 404)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+        rel = http.server.HTTPServer(("127.0.0.1", 0), Rel)
+        threading.Thread(target=rel.serve_forever, daemon=True).start()
+        ENV["OSTIARY_E2E_RELEASES_URL"] = f"http://127.0.0.1:{rel.server_port}"
+        rc, out, err = run("upgrade", "--check")
+        rel.shutdown()
+        ENV.pop("OSTIARY_E2E_RELEASES_URL")
+        check(rc == 10 and "99.0.0" in out, "upgrade --check reports a newer release (exit 10)", out + err)
         os.kill(daemon_pid, signal.SIGTERM)
         daemon_pid = None
         time.sleep(0.5)
         rc, _, _ = run("hosts")
-        check(rc == 102 and not os.path.exists(ENV["AGENTSSH_SOCKET"]), "daemon stops cleanly")
+        check(rc == 102 and not os.path.exists(ENV["OSTIARY_SOCKET"]), "daemon stops cleanly")
         print(f"\nall {passed} checks passed")
     finally:
         if daemon_pid:

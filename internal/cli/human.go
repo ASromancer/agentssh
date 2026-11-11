@@ -19,16 +19,16 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/ASromancer/agentssh/internal/approval"
-	"github.com/ASromancer/agentssh/internal/audit"
-	"github.com/ASromancer/agentssh/internal/daemon"
-	"github.com/ASromancer/agentssh/internal/hosts"
-	"github.com/ASromancer/agentssh/internal/humanok"
-	"github.com/ASromancer/agentssh/internal/paths"
-	"github.com/ASromancer/agentssh/internal/policy"
-	"github.com/ASromancer/agentssh/internal/tray"
-	"github.com/ASromancer/agentssh/internal/ui"
-	"github.com/ASromancer/agentssh/internal/vault"
+	"github.com/ASromancer/ostiary/internal/approval"
+	"github.com/ASromancer/ostiary/internal/audit"
+	"github.com/ASromancer/ostiary/internal/daemon"
+	"github.com/ASromancer/ostiary/internal/hosts"
+	"github.com/ASromancer/ostiary/internal/humanok"
+	"github.com/ASromancer/ostiary/internal/paths"
+	"github.com/ASromancer/ostiary/internal/policy"
+	"github.com/ASromancer/ostiary/internal/tray"
+	"github.com/ASromancer/ostiary/internal/ui"
+	"github.com/ASromancer/ostiary/internal/vault"
 )
 
 const approvalTimeout = 120 * time.Second
@@ -40,12 +40,13 @@ func cmdDaemon(args []string) int {
 	noUI := fs.Bool("no-ui", false, "do not serve the local web UI")
 	noTray := fs.Bool("no-tray", false, "do not show the tray icon")
 	uiPort := fs.Int("ui-port", 0, "UI port on 127.0.0.1 (0 = random)")
+	afterPid := fs.Int("after-pid", 0, "wait for this daemon to release the socket first (used by restarts)")
 	if _, err := parse(fs, args); err != nil {
 		return 2
 	}
-	*noTray = *noTray || os.Getenv("AGENTSSH_NO_TRAY") == "1"
+	*noTray = *noTray || os.Getenv("OSTIARY_NO_TRAY") == "1"
 	if *detach {
-		if err := startDetached(filepath.Join(paths.State(), "daemon.log"), detachArgs(*noUI, *noTray, *uiPort)); err != nil {
+		if err := startDetached(filepath.Join(paths.State(), "daemon.log"), detachArgs(*noUI, *noTray, *uiPort, *afterPid)); err != nil {
 			return errf(1, "%v", err)
 		}
 		return 0
@@ -58,6 +59,9 @@ func cmdDaemon(args []string) int {
 		}
 		log.SetOutput(f)
 	}
+	if *afterPid != 0 {
+		daemon.WaitForPredecessor()
+	}
 	if daemon.Running() { // cheap check first: no keyring unlock for a duplicate start
 		return errf(1, "daemon already running")
 	}
@@ -65,6 +69,24 @@ func cmdDaemon(args []string) int {
 	if err != nil {
 		return errf(1, "%v", err)
 	}
+	d.SetVersion(Version)
+	d.SetRespawn(func(old int) error {
+		return startDetached(filepath.Join(paths.State(), "daemon.log"), detachArgs(*noUI, *noTray, *uiPort, old))
+	})
+	d.SetSetup(daemon.SetupFuncs{
+		Agents: func() []daemon.AgentState {
+			home, _ := os.UserHomeDir()
+			return agentStatesIn(home)
+		},
+		InstallHook: installHookFor,
+		Autostart:   serviceInstalled,
+		SetAutostart: func(on bool) error {
+			if on {
+				return installService(false)
+			}
+			return removeService()
+		},
+	})
 	ln, err := d.Listen() // bind (and refuse a second daemon) before the UI starts
 	if err != nil {
 		return errf(1, "%v", err)
@@ -105,12 +127,15 @@ func cmdDaemon(args []string) int {
 		log.Print(err)
 		return 1
 	}
-	return 0
+	return d.RestartCode()
 }
 
-// detachArgs are the flags a --detach child must inherit.
-func detachArgs(noUI, noTray bool, uiPort int) []string {
+// detachArgs are the flags a --detach child must inherit; afterPid != 0 makes it wait for that daemon.
+func detachArgs(noUI, noTray bool, uiPort, afterPid int) []string {
 	var a []string
+	if afterPid != 0 {
+		a = append(a, "--after-pid", strconv.Itoa(afterPid))
+	}
 	if noUI {
 		a = append(a, "--no-ui")
 	}
@@ -374,7 +399,7 @@ func cmdInstallPolkit(args []string) int {
 	if err := humanok.InstallPolicy(); err != nil {
 		return errf(1, "%v", err)
 	}
-	fmt.Println("installed", humanok.PolicyPath, "— restart the daemon: systemctl --user restart agentssh")
+	fmt.Println("installed", humanok.PolicyPath, "— restart the daemon: systemctl --user restart ostiary")
 	return 0
 }
 
@@ -401,7 +426,7 @@ func hostFlags(fs *flag.FlagSet, h *hosts.Host) (allow, deny *multi) {
 
 func cmdHost(args []string) int {
 	if len(args) == 0 {
-		return errf(2, "usage: agentssh host add|edit|ls|rm|trust ...")
+		return errf(2, "usage: ostiary host add|edit|ls|rm|trust ...")
 	}
 	sub := args[0]
 	cfg, err := hosts.Load(paths.Hosts())
@@ -427,11 +452,11 @@ func cmdHost(args []string) int {
 			return 2
 		}
 		if len(pos) != 1 {
-			return errf(2, "usage: agentssh host %s <name> [--host H --user U --port P --key K --profile P --agent --desc D --allow PAT --deny PAT]", sub)
+			return errf(2, "usage: ostiary host %s <name> [--host H --user U --port P --key K --profile P --agent --desc D --allow PAT --deny PAT]", sub)
 		}
 		name := pos[0]
 		if sub == "add" && cfg.Hosts[name] != nil {
-			return errf(1, "host %q exists; use 'agentssh host edit'", name)
+			return errf(1, "host %q exists; use 'ostiary host edit'", name)
 		}
 		if sub == "edit" && cfg.Hosts[name] == nil {
 			return errf(1, "unknown host %q", name)
@@ -450,7 +475,7 @@ func cmdHost(args []string) int {
 		return adminSimple("host "+sub, daemon.AdminArgs{Op: "host-set", Name: name, Host: h})
 	case "rm", "trust":
 		if len(args) != 2 {
-			return errf(2, "usage: agentssh host %s <name>", sub)
+			return errf(2, "usage: ostiary host %s <name>", sub)
 		}
 		op := map[string]string{"rm": "host-rm", "trust": "trust"}[sub]
 		return adminSimple("host "+sub, daemon.AdminArgs{Op: op, Name: args[1]})
@@ -460,7 +485,7 @@ func cmdHost(args []string) int {
 
 func cmdKey(args []string) int {
 	if len(args) == 0 {
-		return errf(2, "usage: agentssh key gen|import|export|ls|rm ...")
+		return errf(2, "usage: ostiary key gen|import|export|ls|rm ...")
 	}
 	sub, rest := args[0], args[1:]
 	switch sub {
@@ -480,7 +505,7 @@ func cmdKey(args []string) int {
 		return 0
 	case "gen":
 		if len(rest) != 1 {
-			return errf(2, "usage: agentssh key gen <name>")
+			return errf(2, "usage: ostiary key gen <name>")
 		}
 		t, code := openTTY("key gen")
 		if t == nil {
@@ -495,7 +520,7 @@ func cmdKey(args []string) int {
 		return 0
 	case "rm":
 		if len(rest) != 1 {
-			return errf(2, "usage: agentssh key rm <name>")
+			return errf(2, "usage: ostiary key rm <name>")
 		}
 		return adminSimple("key rm", daemon.AdminArgs{Op: "key-rm", Name: rest[0]})
 	case "import":
@@ -506,7 +531,7 @@ func cmdKey(args []string) int {
 			return 2
 		}
 		if (*pw && len(pos) != 1) || (!*pw && len(pos) != 2) {
-			return errf(2, "usage: agentssh key import <name> <private-key-path> | agentssh key import <name> --password")
+			return errf(2, "usage: ostiary key import <name> <private-key-path> | ostiary key import <name> --password")
 		}
 		t, code := openTTY("key import")
 		if t == nil {
@@ -528,7 +553,7 @@ func cmdKey(args []string) int {
 			if err != nil {
 				return errf(1, "parse key: %v", err)
 			}
-			block, err := ssh.MarshalPrivateKey(raw, "agentssh-"+pos[0])
+			block, err := ssh.MarshalPrivateKey(raw, "ostiary-"+pos[0])
 			if err != nil {
 				return errf(1, "%v", err)
 			}
@@ -542,7 +567,7 @@ func cmdKey(args []string) int {
 		return 0
 	case "export":
 		if len(rest) != 1 {
-			return errf(2, "usage: agentssh key export <name>")
+			return errf(2, "usage: ostiary key export <name>")
 		}
 		t, code := openTTY("key export")
 		if t == nil {
@@ -663,7 +688,7 @@ func doctorChecks(notify bool) []ui.Check {
 	}
 	c, err := dialRetry(wait)
 	if err != nil {
-		warn("daemon is not running (systemctl --user start agentssh, or agentssh daemon --detach)")
+		warn("daemon is not running (systemctl --user start ostiary, or ostiary daemon --detach)")
 	} else {
 		if err := c.Call("A.Status", &daemon.Empty{}, &st); err != nil {
 			warn("daemon status: " + err.Error())
@@ -671,14 +696,14 @@ func doctorChecks(notify bool) []ui.Check {
 			ok("daemon is running")
 			switch {
 			case st.VaultMissing:
-				warn("no vault; run 'agentssh init'")
+				warn("no vault; run 'ostiary init'")
 			case st.Locked:
-				warn("vault is locked; run 'agentssh unlock'")
+				warn("vault is locked; run 'ostiary unlock'")
 			default:
 				ok("vault is unlocked")
 			}
 			if st.UserOnly {
-				warn("config changed on disk; agent requests are refused until 'agentssh reload'")
+				warn("config changed on disk; agent requests are refused until 'ostiary reload'")
 			}
 			if st.Auth == "os" {
 				ok("approvals use OS authentication")
@@ -701,15 +726,15 @@ func doctorChecks(notify bool) []ui.Check {
 			continue
 		}
 		b, _ := os.ReadFile(hookFile(in.name, home))
-		if strings.Contains(string(b), "hook "+in.name) || (in.name == "claude" && strings.Contains(string(b), "agentssh@")) {
-			ok(in.name + ": agentssh hook installed")
+		if strings.Contains(string(b), "hook "+in.name) || (in.name == "claude" && strings.Contains(string(b), "ostiary@")) {
+			ok(in.name + ": ostiary hook installed")
 		} else {
-			warn(in.name + ": agentssh hook not installed; direct ssh is not blocked (agentssh install-hooks " + in.name + ")")
+			warn(in.name + ": ostiary hook not installed; direct ssh is not blocked (ostiary install-hooks " + in.name + ")")
 		}
 	}
 
 	if notify {
-		if err := approval.Notify(approval.Notice{Title: "agentssh doctor", Body: "test notification"}); err != nil {
+		if err := approval.Notify(approval.Notice{Title: "Ostiary doctor", Body: "test notification"}); err != nil {
 			warn("desktop notifications do not work (" + err.Error() + "): approval codes will be shown in the terminal, " +
 				"so an agent that can fake a TTY could approve itself; prefer hardened mode on this machine")
 		} else {
@@ -717,8 +742,8 @@ func doctorChecks(notify bool) []ui.Check {
 		}
 	}
 
-	if runtime.GOOS == "linux" && oldUnit(filepath.Join(home, ".config", "systemd", "user", "agentssh.service")) {
-		warn("the agentssh service starts before your desktop session (old unit); run 'agentssh install-service' to update it")
+	if runtime.GOOS == "linux" && oldUnit(filepath.Join(home, ".config", "systemd", "user", "ostiary.service")) {
+		warn("the ostiary service starts before your desktop session (old unit); run 'ostiary install-service' to update it")
 	}
 
 	keys, _ := filepath.Glob(filepath.Join(home, ".ssh", "id_*"))
@@ -761,16 +786,41 @@ func oldUnit(path string) bool {
 	return err == nil && !strings.Contains(string(b), "graphical-session.target")
 }
 
+// cmdUninstallService removes the login autostart and leaves the running
+// daemon alone. --yes skips the TTY (the Windows uninstaller has no console).
+func cmdUninstallService(args []string) int {
+	yes := len(args) == 1 && args[0] == "--yes"
+	if yes && runtime.GOOS != "windows" {
+		return errf(2, "--yes is only for the Windows uninstaller")
+	}
+	if !yes {
+		if t, code := openTTY("uninstall-service"); t == nil {
+			return code
+		}
+	}
+	if err := removeService(); err != nil {
+		return errf(1, "%v", err)
+	}
+	fmt.Println("Ostiary will no longer start at login (the running daemon was left alone)")
+	return 0
+}
+
 // cmdInstallService re-runs the service install on an initialized setup, so
 // an upgrade can pick up a changed unit.
 func cmdInstallService(args []string) int {
-	if t, code := openTTY("install-service"); t == nil {
-		return code
+	yes := len(args) == 1 && args[0] == "--yes"
+	if yes && runtime.GOOS != "windows" {
+		return errf(2, "--yes is only for the Windows installer")
 	}
-	if err := installService(); err != nil {
+	if !yes {
+		if t, code := openTTY("install-service"); t == nil {
+			return code
+		}
+	}
+	if err := installService(true); err != nil {
 		return errf(1, "%v", err)
 	}
-	fmt.Println("service updated; if approvals should use OS authentication, see 'agentssh install-polkit'")
+	fmt.Println("service updated; if approvals should use OS authentication, see 'ostiary install-polkit'")
 	return 0
 }
 
@@ -787,16 +837,14 @@ func cmdInit(args []string) int {
 	if _, err := os.Stat(paths.Vault()); err == nil {
 		return errf(1, "already initialized (%s exists)", paths.Vault())
 	}
-	for _, d := range []string{paths.Config(), paths.State(), paths.Out()} {
-		if err := os.MkdirAll(d, 0o700); err != nil {
-			return errf(1, "%v", err)
-		}
-	}
-
 	key, salt := vault.NewKey(), []byte(nil)
 	keyringErr := errors.New("--passphrase given")
+	_, hostsErr := os.Stat(paths.Hosts())
 	if !*usePass {
-		keyringErr = vault.KeyringSet(key)
+		// Creates the vault first, then stores the key: never replaces an existing vault's key.
+		if keyringErr = daemon.InitVaultKeyring(key); errors.Is(keyringErr, daemon.ErrInitialized) {
+			return errf(1, "already initialized (%s exists)", paths.Vault())
+		}
 	}
 	if err := keyringErr; err != nil {
 		t.printf("not using the OS keyring (%v); the vault will use a passphrase.\n", err)
@@ -813,34 +861,27 @@ func cmdInit(args []string) int {
 			}
 			t.printf("passphrases differ\n")
 		}
+		if err := daemon.InitVault(key, salt); err != nil {
+			return errf(1, "%v", err)
+		}
 	} else {
 		t.printf("master key stored in the OS keyring\n")
 	}
-
-	if _, err := os.Stat(paths.Hosts()); errors.Is(err, os.ErrNotExist) {
-		cfg := &hosts.Config{Hosts: map[string]*hosts.Host{}}
-		home, _ := os.UserHomeDir()
-		if imported, err := hosts.ImportSSHConfig(filepath.Join(home, ".ssh", "config")); err == nil {
-			cfg.Hosts = imported
-			t.printf("imported %d hosts from ~/.ssh/config (hidden from agents until 'agentssh host edit <name> --agent --key <key>')\n", len(imported))
+	if errors.Is(hostsErr, os.ErrNotExist) {
+		if cfg, err := hosts.Load(paths.Hosts()); err == nil && len(cfg.Hosts) > 0 {
+			t.printf("imported %d hosts from ~/.ssh/config (hidden from agents until 'ostiary host edit <name> --agent --key <key>')\n", len(cfg.Hosts))
 		}
-		if err := cfg.Save(paths.Hosts()); err != nil {
-			return errf(1, "%v", err)
-		}
-	}
-	if err := vault.Save(paths.Vault(), key, salt, &vault.Data{ConfigHash: daemon.ConfigHash()}); err != nil {
-		return errf(1, "%v", err)
 	}
 	t.printf("vault created: %s\n", paths.Vault())
 
-	if t.yes("install and start the agentssh user service?", true) {
-		if err := installService(); err != nil {
+	if t.yes("install and start the ostiary user service?", true) {
+		if err := installService(true); err != nil {
 			t.printf("service: %v\n", err)
 		}
 	}
 	home, _ := os.UserHomeDir()
 	for _, in := range installers {
-		if !in.detect(home) || !t.yes("install the agentssh skill and hook for "+in.name+"?", true) {
+		if !in.detect(home) || !t.yes("install the ostiary skill and hook for "+in.name+"?", true) {
 			continue
 		}
 		cmd, err := hookCommand(in.name)
@@ -852,14 +893,14 @@ func cmdInit(args []string) int {
 		}
 	}
 	if salt != nil {
-		t.printf("\nThe daemon starts locked in passphrase mode: run 'agentssh unlock'.\n")
+		t.printf("\nThe daemon starts locked in passphrase mode: run 'ostiary unlock'.\n")
 	}
 	t.printf(`
 Next steps:
-  agentssh key gen web1-agent                       # then add the public key on the server
-  agentssh host add web1 --host 10.0.0.5 --user deploy --key web1-agent --agent --desc "..."
-  agentssh host trust web1                          # verify and pin the host key
-  agentssh doctor
+  ostiary key gen web1-agent                       # then add the public key on the server
+  ostiary host add web1 --host 10.0.0.5 --user deploy --key web1-agent --agent --desc "..."
+  ostiary host trust web1                          # verify and pin the host key
+  ostiary doctor
 `)
 	return 0
 }

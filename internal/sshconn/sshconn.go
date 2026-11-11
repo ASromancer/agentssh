@@ -1,5 +1,5 @@
 // Package sshconn runs commands and transfers files over pooled SSH
-// connections, with strict host key checking against agentssh's own
+// connections, with strict host key checking against ostiary's own
 // known_hosts file.
 package sshconn
 
@@ -48,9 +48,9 @@ type HostKeyError struct {
 
 func (e *HostKeyError) Error() string {
 	if e.Changed {
-		return fmt.Sprintf("HOST KEY CHANGED for %s; refusing to connect. If expected, the user must run 'agentssh host trust %s'", e.Name, e.Name)
+		return fmt.Sprintf("HOST KEY CHANGED for %s; refusing to connect. If expected, the user must run 'ostiary host trust %s'", e.Name, e.Name)
 	}
-	return fmt.Sprintf("unknown host key for %s; the user must run 'agentssh host trust %s'", e.Name, e.Name)
+	return fmt.Sprintf("unknown host key for %s; the user must run 'ostiary host trust %s'", e.Name, e.Name)
 }
 
 func (p *Pool) client(t Target) (*ssh.Client, error) {

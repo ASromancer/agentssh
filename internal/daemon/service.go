@@ -14,12 +14,12 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/ASromancer/agentssh/internal/approval"
-	"github.com/ASromancer/agentssh/internal/audit"
-	"github.com/ASromancer/agentssh/internal/hosts"
-	"github.com/ASromancer/agentssh/internal/paths"
-	"github.com/ASromancer/agentssh/internal/policy"
-	"github.com/ASromancer/agentssh/internal/sshconn"
+	"github.com/ASromancer/ostiary/internal/approval"
+	"github.com/ASromancer/ostiary/internal/audit"
+	"github.com/ASromancer/ostiary/internal/hosts"
+	"github.com/ASromancer/ostiary/internal/paths"
+	"github.com/ASromancer/ostiary/internal/policy"
+	"github.com/ASromancer/ostiary/internal/sshconn"
 )
 
 const (
@@ -82,7 +82,7 @@ func localProblem(eng *policy.Engine, p string) string {
 	for _, c := range check {
 		for _, dir := range []string{paths.Config(), paths.State()} {
 			if paths.Within(c, dir) {
-				return "local path is inside agentssh's own files"
+				return "local path is inside ostiary's own files"
 			}
 		}
 		if eng.Classify("cat "+shellQuote(c), nil, nil).Level == policy.Forbidden {
@@ -107,10 +107,10 @@ func (s *Service) Exec(a *ExecArgs, r *ExecReply) error {
 	cfg, eng, locked, userOnly := d.snapshot()
 	switch {
 	case locked:
-		r.Code, r.Msg = CodeNoDaemon, "vault is locked; ask the user to run 'agentssh unlock'"
+		r.Code, r.Msg = CodeNoDaemon, "vault is locked; ask the user to run 'ostiary unlock'"
 		return nil
 	case userOnly:
-		r.Code, r.Msg = CodeBlocked, "agentssh config changed on disk and is not approved; ask the user to review it and run 'agentssh reload'"
+		r.Code, r.Msg = CodeBlocked, "ostiary config changed on disk and is not approved; ask the user to review it and run 'ostiary reload'"
 		return nil
 	}
 	repo, err := hosts.FindRepo(a.Cwd)
@@ -120,7 +120,7 @@ func (s *Service) Exec(a *ExecArgs, r *ExecReply) error {
 	}
 	profile, ok := cfg.Visible(repo)[a.Host]
 	if !ok {
-		r.Code, r.Msg = CodeBlocked, fmt.Sprintf("host %q is not available to agents here; see 'agentssh hosts'", a.Host)
+		r.Code, r.Msg = CodeBlocked, fmt.Sprintf("host %q is not available to agents here; see 'ostiary hosts'", a.Host)
 		return nil
 	}
 	h := cfg.Hosts[a.Host]
@@ -388,7 +388,7 @@ func Summarize(path string, id int) string {
 	}
 	out := head
 	if omitted := total - len(head) - len(tail); omitted > 0 {
-		out = append(out, fmt.Sprintf("… %d lines omitted, full: agentssh out %d", omitted, id))
+		out = append(out, fmt.Sprintf("… %d lines omitted, full: ostiary out %d", omitted, id))
 	}
 	out = append(out, tail...)
 	if len(out) == 0 {
@@ -450,7 +450,7 @@ func (s *Service) job(id int) (*sshconn.Job, error) {
 	defer s.d.mu.Unlock()
 	j := s.d.jobs[id]
 	if j == nil {
-		return nil, fmt.Errorf("no job %d (jobs are lost when the daemon restarts; output may still be in 'agentssh out %d')", id, id)
+		return nil, fmt.Errorf("no job %d (jobs are lost when the daemon restarts; output may still be in 'ostiary out %d')", id, id)
 	}
 	return j, nil
 }
@@ -480,7 +480,7 @@ func (s *Service) JobKill(a *JobArgs, r *JobReply) error {
 func (s *Service) Status(_ *Empty, r *StatusReply) error {
 	d := s.d
 	d.mu.Lock()
-	r.Locked, r.UserOnly = d.data == nil, d.userOnly
+	r.Locked, r.UserOnly, r.Update = d.data == nil, d.userOnly, d.update
 	d.mu.Unlock()
 	salt, err := vaultSalt()
 	r.VaultMissing = err != nil
@@ -520,6 +520,12 @@ func (s *Service) Decide(a *DecideArgs, _ *Empty) error {
 	default:
 		return fmt.Errorf("unknown choice %q", a.Choice)
 	}
+	if a.Choice == "s" {
+		// A destructive command is never re-runnable without a fresh approval.
+		if req, ok := d.q.Get(a.ID); ok && req.Level == policy.Destructive.String() {
+			return errors.New("destructive commands cannot be approved for 30 minutes; approve once")
+		}
+	}
 	switch {
 	case a.Choice == "n": // denying needs no proof
 		_, err := d.q.Resolve(a.ID, a.Choice, a.Note, "none")
@@ -550,6 +556,18 @@ func (s *Service) Decide(a *DecideArgs, _ *Empty) error {
 func (s *Service) Lock(_ *Empty, _ *Empty) error {
 	s.d.lock()
 	s.d.log.Write(audit.Entry{Kind: "admin", Cmd: "lock", Decision: "allow"})
+	return nil
+}
+
+// Shutdown stops the daemon: it replies, then closes the listener so Serve returns.
+func (s *Service) Shutdown(_ *Empty, _ *Empty) error {
+	s.d.log.Write(audit.Entry{Kind: "admin", Cmd: "stop", Decision: "allow"})
+	s.d.mu.Lock()
+	ln := s.d.ln
+	s.d.mu.Unlock()
+	if ln != nil {
+		go func() { time.Sleep(100 * time.Millisecond); ln.Close() }() // let the reply go out first
+	}
 	return nil
 }
 

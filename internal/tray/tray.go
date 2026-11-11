@@ -1,6 +1,6 @@
 //go:build linux || windows || (darwin && cgo)
 
-// Package tray shows agentssh in the system tray: the pending count, and a
+// Package tray shows ostiary in the system tray: the pending count, and a
 // menu to open the UI, lock the vault or hide the icon.
 package tray
 
@@ -44,7 +44,7 @@ func Run(o Options, done <-chan struct{}) {
 	systray.Run(func() {
 		systray.SetIcon(Icon(runtime.GOOS))
 		systray.SetTooltip(Title(0))
-		open := systray.AddMenuItem("Mở agentssh", "Mở trang quản lý agentssh")
+		open := systray.AddMenuItem("Mở Ostiary", "Mở trang quản lý Ostiary")
 		lock := systray.AddMenuItem("Khóa vault", "Xóa key khỏi bộ nhớ daemon")
 		systray.AddSeparator()
 		hide := systray.AddMenuItem("Ẩn biểu tượng", "Ẩn tới lần khởi động sau")

@@ -52,14 +52,14 @@ func (platform) Available() error {
 }
 
 // Confirm asks for the current user's Windows password and checks it with
-// LogonUserW; the resulting token must belong to the user running agentssh.
+// LogonUserW; the resulting token must belong to the user running ostiary.
 // ponytail: ctx is not honoured while the modal prompt is open.
 func (platform) Confirm(_ context.Context, msg string) error {
 	u, err := user.Current()
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
-	caption, err := windows.UTF16PtrFromString("agentssh")
+	caption, err := windows.UTF16PtrFromString("Ostiary")
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Ostiary
+Comment=Người gác cửa giữa AI agent và máy chủ của bạn
+Exec=ostiary open
+Icon=ostiary
+Terminal=false
+Categories=Utility;Security;
+StartupNotify=false

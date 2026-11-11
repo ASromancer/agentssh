@@ -28,7 +28,7 @@ func TestLocalURL(t *testing.T) {
 
 func TestOpenEnv(t *testing.T) {
 	env := []string{"BROWSER=/tmp/evil", "LD_PRELOAD=/tmp/evil.so", "PATH=/tmp/evil", "DISPLAY=:0", "XAUTHORITY=/x",
-		"XDG_CURRENT_DESKTOP=GNOME", "HOME=/home/u", "GTK_IM_MODULE=ibus", "XMODIFIERS=@im=ibus", "LANGUAGE=vi", "SystemRoot=C:\\Windows", "AGENTSSH_X=1"}
+		"XDG_CURRENT_DESKTOP=GNOME", "HOME=/home/u", "GTK_IM_MODULE=ibus", "XMODIFIERS=@im=ibus", "LANGUAGE=vi", "SystemRoot=C:\\Windows", "OSTIARY_X=1"}
 	got := strings.Join(openEnv(env, "linux"), " ")
 	if want := "DISPLAY=:0 XAUTHORITY=/x XDG_CURRENT_DESKTOP=GNOME HOME=/home/u GTK_IM_MODULE=ibus XMODIFIERS=@im=ibus LANGUAGE=vi PATH=/usr/local/bin:/usr/bin:/bin:/snap/bin"; got != want {
 		t.Errorf("linux:\n got %s\nwant %s", got, want)

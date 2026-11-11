@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ASromancer/agentssh/internal/daemon"
+	"github.com/ASromancer/ostiary/internal/daemon"
 )
 
 // fakeDaemon answers Exec: "pending" once, then runs.

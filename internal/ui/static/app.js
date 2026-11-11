@@ -1,5 +1,5 @@
 "use strict";
-// agentssh UI (vanilla JS, no build). All text from the daemon (commands,
+// ostiary UI (vanilla JS, no build). All text from the daemon (commands,
 // notes, host names, audit fields) is agent-controlled: it enters the page
 // only through textContent / text nodes, never as HTML.
 
@@ -11,7 +11,7 @@ const el = (tag, cls, text) => {
   return e;
 };
 const PAGE = 50;
-const VIEWS = { approvals: "Duyệt", hosts: "Host", keychain: "Kho khóa", knownhosts: "Known hosts", log: "Nhật ký" };
+const VIEWS = { setup: "Bắt đầu", approvals: "Duyệt", hosts: "Host", keychain: "Kho khóa", knownhosts: "Known hosts", log: "Nhật ký" };
 let status = null;
 let auditOffset = 0;
 let view = "approvals";
@@ -76,10 +76,117 @@ async function call(method, path, body) {
     opt.body = JSON.stringify(body || {});
   }
   const r = await fetch(path, opt);
+  if (r.status === 401) { sessionLost(); throw new Error("Unauthorized"); }
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data.error || r.statusText);
   return data;
 }
+// The session lives in daemon memory: after a restart every call is 401. Stop everything and say how to get back in.
+let sessionDead = false;
+function sessionLost() {
+  if (sessionDead) return;
+  sessionDead = true;
+  const upgraded = !!upgradeWait; // after an update the new daemon has a new port and session
+  if (upgraded) { upgradeWait.close(); upgradeWait = null; }
+  try { es.close(); } catch (e) { /* event stream not created yet */ }
+  const o = el("div", "sessionlost");
+  o.setAttribute("role", "alertdialog");
+  o.setAttribute("aria-modal", "true");
+  o.setAttribute("aria-label", "Phiên đăng nhập đã hết hạn");
+  const box = el("div", "card");
+  box.append(icon("alert", 32), el("h2", null, upgraded ? "Ostiary đã cập nhật" : "Phiên đăng nhập đã hết hạn"),
+    el("p", null, (upgraded ? "Ostiary đã cập nhật và khởi động lại. " : "") + "Mở lại Ostiary từ biểu tượng app hoặc chạy `ostiary open`."));
+  o.appendChild(box);
+  document.body.appendChild(o);
+}
+
+// ---- errors:begin (also loaded by internal/ui/testdata/errors_test.mjs) ----
+// Exact daemon strings -> Vietnamese. First match wins; no match keeps the raw text.
+const NET_VI = { "connection refused": "connection refused", "i/o timeout": "hết thời gian chờ", "no route to host": "không có đường tới host", "no such host": "không tìm thấy tên host" };
+const subst = (to, m) => (typeof to === "function" ? to(m) : to.replace(/\$(\d)/g, (_, i) => m[i] || ""));
+const ERR_RULES = [
+  [/^no pending request #(\d+)/, "Yêu cầu #$1 đã hết hạn hoặc đã được xử lý."],
+  [/^request #(\d+) was already decided/, "Yêu cầu #$1 đã được xử lý."],
+  [/^bad code: request denied after/, "Sai mã 3 lần: yêu cầu đã bị từ chối."],
+  [/^bad code: ticket cancelled after/, "Sai mã 3 lần: thao tác đã bị hủy."],
+  [/^bad code: (\d+) tries? left/, "Sai mã duyệt (còn $1 lần thử)."],
+  [/^not confirmed by the user/, "Bạn chưa xác nhận (hoặc đã hủy) trên hộp thoại hệ điều hành."],
+  [/^OS authentication failed/, "Không hiện được hộp thoại xác thực của hệ điều hành. Xem màn Bắt đầu để dùng mã duyệt hoặc cài polkit."],
+  [/^another confirmation is already in progress/, "Đang có một hộp thoại xác nhận khác. Hãy hoàn tất nó trước."],
+  [/^approval ticket expired or invalid/, "Phiếu duyệt đã hết hạn. Hãy thao tác lại."],
+  [/^vault is locked/, "Vault đang khóa. Mở khóa ở chip Vault trên cùng rồi thử lại."],
+  [/^hosts\.toml or rules\.toml changed on disk/, "Cấu hình trên đĩa đã đổi. Kiểm tra rồi bấm \"Đọc lại cấu hình\" ở màn Host."],
+  [/^fetch host key from (\S+?):? .*?(connection refused|i\/o timeout|no route to host|no such host)/, (m) => "Không kết nối được tới " + m[1] + " (" + NET_VI[m[2]] + ")."],
+  [/dial tcp .*(connection refused|i\/o timeout|no route to host|no such host)/, (m) => "Không kết nối được host (" + NET_VI[m[1]] + ")."],
+  [/^dial unix /, "Daemon ostiary không chạy."],
+  [/^unknown host "(.*)"/, "Không tìm thấy host $1."],
+  [/^already initialized/, "Vault đã tồn tại."],
+  [/^use at least 8 characters/, "Passphrase cần ít nhất 8 ký tự."],
+  [/^OS keyring unavailable/, "Keyring của hệ điều hành không dùng được. Hãy chọn passphrase."],
+  [/^(agent setup|autostart) is not available/, "Daemon này không hỗ trợ thao tác này. Hãy chạy lại bằng bản ostiary mới."],
+  [/^key "(.*)" already exists/, "Key $1 đã tồn tại."],
+  [/^this key is protected/, "Key này được bảo vệ bằng passphrase: hãy nhập passphrase của key."],
+  [/^parse key:|passphrase protected|^x509:/, "File không phải private key hợp lệ (OpenSSH/PEM)."],
+  [/^nothing to import/, "Chưa có nội dung để lưu."],
+  [/^unknown key "(.*)"/, "Không tìm thấy key $1."],
+  [/^unknown profile "(.*?)"/, "Profile \"$1\" không hợp lệ (readonly, standard hoặc full)."],
+  [/^(missing host|host or key missing)/, "Thiếu địa chỉ host hoặc key."],
+  [/^bad request/, "Yêu cầu không hợp lệ."],
+  [/^vault: wrong master key or passphrase/, "Sai passphrase."],
+  [/^(keyring:|OS keyring did not answer)/, "Không đọc được khóa trong keyring của hệ điều hành."],
+  [/vault\.bin: no such file or directory/, "Chưa có vault. Tạo vault ở màn Bắt đầu."],
+  [/^vault: (not an ostiary vault|truncated)/, "File vault bị hỏng."],
+  [/^no output for id (\d+)/, "Output của #$1 không còn (chỉ giữ 7 ngày)."],
+  [/^error parsing regexp/, "Regexp không hợp lệ."],
+  [/^(Unauthorized|Misdirected Request)$/, "Phiên đăng nhập đã hết hạn."],
+  [/^Failed to fetch$/, "Mất kết nối tới daemon ostiary."],
+];
+function friendlyError(msg) {
+  const s = String(msg == null ? "" : msg);
+  for (const [re, to] of ERR_RULES) {
+    const m = re.exec(s);
+    if (m) return subst(to, m);
+  }
+  return s;
+}
+// Approval reasons (policy/classify.go, daemon localProblem) -> Vietnamese; dynamic parts stay as is.
+const LV_VI = { read: "chỉ đọc", mutate: "thay đổi", destructive: "phá hủy", forbidden: "bị cấm" };
+const REASON_RULES = [
+  [/^empty command$/, "Lệnh rỗng"],
+  [/^nested shell too deep$/, "Shell lồng nhau quá sâu"],
+  [/^parse error: ([\s\S]*)/, "Không phân tích được lệnh: $1"],
+  [/^reference to sensitive path: (.*)/, "Truy cập đường dẫn nhạy cảm: $1"],
+  [/^glob may match sensitive path: (.*)/, "Mẫu glob có thể khớp đường dẫn nhạy cảm: $1"],
+  [/^command name is not static: (.*)/, "Tên lệnh không cố định (biến hoặc thay thế): $1"],
+  [/^interactive command (\S+) is not supported \(no PTY\); use (.*)/, "Lệnh tương tác $1 không được hỗ trợ (không có PTY); dùng $2"],
+  [/^(\S+) -c: classified by its script/, "$1 -c: phân loại theo nội dung script"],
+  [/^downloaded code executed by (.*)/, "Code tải về được chạy bởi $1"],
+  [/^(\S+) -c with a dynamic script/, "$1 -c với script động"],
+  [/^(\S+) runs a script or stdin with unknown content/, "$1 chạy script hoặc stdin không rõ nội dung"],
+  [/^(\S+) runs code with unknown content/, "$1 chạy code không rõ nội dung"],
+  [/^netcat executing a program/, "netcat chạy chương trình (reverse shell)"],
+  [/^(\S+) with SQL (\w+)/, "$1 với lệnh SQL $2"],
+  [/^downloaded\/decoded data piped into (.*)/, "Dữ liệu tải về hoặc giải mã được đưa vào $1"],
+  [/^(\S+): matches host deny rule/, "$1: khớp luật chặn (deny) của host"],
+  [/^(\S+): read \(host allow rule\)/, "$1: chỉ đọc (luật allow của host)"],
+  [/^(\S+): mutate \(dynamic argument (.*)\)/, "$1: thay đổi (đối số động $2)"],
+  [/^(\S+): (read|mutate|destructive|forbidden) \(rule "(.*)"\)/, (m) => m[1] + ": " + LV_VI[m[2]] + " (theo luật \"" + m[3] + "\")"],
+  [/^(\S+): (read|mutate|destructive|forbidden) \(no rule\)/, (m) => m[1] + ": " + LV_VI[m[2]] + " (không có luật, dùng mức mặc định)"],
+  [/^(.*) writes to a dynamic path (.*)/, "$1 ghi vào đường dẫn động $2"],
+  [/^(.*) writes to system path (.*)/, "$1 ghi vào đường dẫn hệ thống $2"],
+  [/^(.*) writes file (.*)/, "$1 ghi file $2"],
+  [/^local path must be absolute/, "Đường dẫn local phải là đường dẫn tuyệt đối"],
+  [/^local path is inside ostiary's own files/, "Đường dẫn local nằm trong file của ostiary"],
+  [/^local path refers to a sensitive file: (.*)/, "Đường dẫn local trỏ tới file nhạy cảm: $1"],
+];
+function reasonVi(text) {
+  for (const [re, to] of REASON_RULES) {
+    const m = re.exec(text);
+    if (m) return subst(to, m);
+  }
+  return text;
+}
+// ---- errors:end ----
 
 // ---- toasts ----
 function toast(msg, kind) {
@@ -97,7 +204,7 @@ function toast(msg, kind) {
   if (kind !== "error") setTimeout(gone, 5000); // errors stay until closed
 }
 const ok = (m) => toast(m, "ok");
-const fail = (e) => toast(e && e.message ? e.message : String(e), "error");
+const fail = (e) => sessionDead || toast(friendlyError(e && e.message ? e.message : String(e)), "error");
 
 async function busy(button, fn) {
   button.disabled = true;
@@ -121,8 +228,8 @@ function copyText(text, btn) {
 function copyBtn(text, label) {
   const b = el("button", "copybtn");
   b.type = "button";
-  b.setAttribute("aria-label", label || "Copy");
-  b.title = label || "Copy";
+  b.setAttribute("aria-label", label || "Sao chép");
+  b.title = label || "Sao chép";
   b.appendChild(icon("copy"));
   b.addEventListener("click", (e) => { e.stopPropagation(); copyText(typeof text === "function" ? text() : text, b); });
   return b;
@@ -224,6 +331,7 @@ function askForm(o) {
     form.noValidate = true;
     form.id = "form-" + Date.now();
     if (o.desc) form.appendChild(el("p", null, o.desc));
+    (o.nodes || []).forEach((n) => form.appendChild(n));
     if (o.info) form.appendChild(el("div", "infobox", o.info));
     const built = (o.fields || []).map((d) => {
       const inp = el("input", "input" + (d.mono ? " mono" : ""));
@@ -283,13 +391,13 @@ function applyTheme(t) {
 }
 (() => {
   let saved = null;
-  try { saved = localStorage.getItem("agentssh-theme"); } catch (e) { /* storage blocked */ }
+  try { saved = localStorage.getItem("ostiary-theme"); } catch (e) { /* storage blocked */ }
   applyTheme(saved === "light" || saved === "dark" ? saved : null);
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => applyTheme(document.documentElement.dataset.theme || null));
   $("theme").addEventListener("click", () => {
     const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
     const next = dark ? "light" : "dark";
-    try { localStorage.setItem("agentssh-theme", next); } catch (e) { /* ignore */ }
+    try { localStorage.setItem("ostiary-theme", next); } catch (e) { /* ignore */ }
     applyTheme(next);
   });
 })();
@@ -305,6 +413,7 @@ function showView(name) {
   $("title").textContent = VIEWS[name];
   if (location.hash !== "#" + name && !location.hash.startsWith("#req=")) history.replaceState(null, "", "#" + name);
   const run = (p) => p.catch(fail);
+  if (name === "setup") run(loadSetup());
   if (name === "hosts") run(loadHosts());
   if (name === "keychain") run(loadKeychain());
   if (name === "knownhosts") run(loadKnownHosts());
@@ -321,16 +430,53 @@ async function loadStatus() {
   am.replaceChildren(icon(os ? "shieldcheck" : "key"), document.createTextNode(os ? "Xác thực hệ điều hành" : "Mã duyệt"));
   am.title = os ? "" : (status.AuthNote || "");
   const vs = $("vaultstate");
-  vs.classList.toggle("ok", !status.Locked);
-  vs.classList.toggle("warn", !!status.Locked);
-  vs.replaceChildren(icon(status.Locked ? "lock" : "unlock"), document.createTextNode(status.Locked ? "Vault đang khóa" : "Vault đang mở"));
+  const miss = !!status.VaultMissing;
+  vs.classList.toggle("ok", !status.Locked && !miss);
+  vs.classList.toggle("warn", !!status.Locked || miss);
+  vs.title = miss ? "Chưa có vault: bấm để tạo ở màn Bắt đầu" : "Bấm để khóa hoặc mở khóa vault";
+  vs.replaceChildren(icon(status.Locked || miss ? "lock" : "unlock"), document.createTextNode(miss ? "Chưa có vault" : status.Locked ? "Vault đang khóa" : "Vault đang mở"));
+  noreqWarn();
   const n = status.Pending ? String(status.Pending) : "";
   $("pendingcount").textContent = n;
-  document.title = (n ? "(" + n + ") " : "") + "agentssh";
+  document.title = (n ? "(" + n + ") " : "") + "Ostiary";
   $("configwarn").classList.toggle("hidden", !status.UserOnly);
+  renderUpdate(status.Update);
+}
+const RELEASE_PREFIX = "https://github.com/ASromancer/ostiary/";
+let upgradeWait = null;
+function renderUpdate(u) {
+  $("updatebanner").classList.toggle("hidden", !u);
+  const box = $("updatebody");
+  if (!u) { box.replaceChildren(); return; }
+  const key = u.Version + "|" + u.URL + "|" + (u.Manual || "");
+  if (box.dataset.key === key) return; // keep the button state across status polls
+  box.dataset.key = key;
+  const kids = [el("span", null, "Có bản Ostiary " + u.Version)];
+  if (u.URL && u.URL.startsWith(RELEASE_PREFIX)) {
+    const a = el("a", null, "Xem thay đổi");
+    a.href = u.URL; a.target = "_blank"; a.rel = "noopener noreferrer";
+    kids.push(a);
+  }
+  if (u.Manual) {
+    const cb = el("div", "cmdbox");
+    cb.append(el("pre", "cmd", u.Manual), copyBtn(u.Manual, "Sao chép lệnh"));
+    kids.push(cb);
+  } else {
+    const b = el("button", "btn primary", "Cập nhật");
+    b.type = "button";
+    b.addEventListener("click", () => busy(b, async () => {
+      const out = await admin("upgrade", u.Version);
+      if (out == null) return;
+      if (out) ok(out);
+      upgradeWait = waitLayer("Cập nhật Ostiary", "Ostiary đang khởi động lại…");
+    }));
+    kids.push(b);
+  }
+  box.replaceChildren(...kids);
 }
 async function toggleVault() {
   if (!status) return;
+  if (status.VaultMissing) { location.hash = "#setup"; return; }
   if (!status.Locked) { await call("POST", "/api/lock"); ok("Đã khóa vault"); return refresh(); }
   let pass = "";
   if (status.Passphrase) {
@@ -343,6 +489,32 @@ async function toggleVault() {
   await call("POST", "/api/unlock", { pass });
   ok("Đã mở khóa vault");
   await refresh();
+}
+// UX-19: an empty approvals list must not reassure while agents are being refused.
+function noreqWarn() {
+  const w = $("noreqwarn");
+  const k = status.VaultMissing ? "missing" : status.Locked ? "locked" : "";
+  if (w.dataset.k === k) return;
+  w.dataset.k = k;
+  w.replaceChildren();
+  w.classList.toggle("hidden", !k);
+  if (!k) return;
+  const b = button(k === "missing" ? "Tạo vault" : "Mở khóa", "primary", k === "missing" ? "plus" : "unlock");
+  b.addEventListener("click", () => busy(b, toggleVault));
+  w.append(icon("alert"), el("div", null, k === "missing" ? "Chưa có vault: mọi lệnh của agent đang bị từ chối cho tới khi bạn tạo vault." : "Vault đang khóa: mọi lệnh của agent đang bị từ chối cho tới khi bạn mở khóa."), b);
+}
+// Vault-backed admin ops start nothing while the vault is locked or missing (the daemon refuses them too).
+const VAULT_OPS = new Set(["host-set", "host-rm", "reload", "key-gen", "key-import", "key-rm", "key-export"]);
+async function needVault() {
+  if (!status || (!status.Locked && !status.VaultMissing)) return true;
+  const miss = !!status.VaultMissing;
+  const go = await confirmBox(miss ? "Chưa có vault" : "Vault đang khóa",
+    miss ? "Thao tác này cần vault. Hãy tạo vault ở màn Bắt đầu trước." : "Thao tác này cần vault đang mở. Hãy mở khóa vault rồi làm lại.",
+    { ok: miss ? "Tạo vault" : "Mở khóa" });
+  if (!go) return false;
+  if (miss) { location.hash = "#setup"; return false; }
+  await toggleVault();
+  return !status.Locked;
 }
 $("vaultstate").addEventListener("click", (e) => busy(e.currentTarget, toggleVault));
 
@@ -395,7 +567,7 @@ function relTime(iso) {
   if (s < 60) return s + " giây trước";
   if (s < 3600) return Math.floor(s / 60) + " phút trước";
   if (s < 86400) return Math.floor(s / 3600) + " giờ trước";
-  return new Date(iso).toLocaleString();
+  return fmtTime(iso);
 }
 const hasTime = (iso) => iso && new Date(iso).getFullYear() > 2000;
 
@@ -436,7 +608,7 @@ function buildCard(r) {
 
   const cmdbox = el("div", "cmdbox");
   cmdbox.appendChild(r.kind === "run" || r.kind === "job" ? highlighted(r.cmd, r.reasons) : el("pre", "cmd", r.cmd));
-  cmdbox.appendChild(copyBtn(r.cmd, "Copy lệnh"));
+  cmdbox.appendChild(copyBtn(r.cmd, "Sao chép lệnh"));
   body.appendChild(cmdbox);
 
   const why = (r.reasons || []).filter((x) => x.level !== "read");
@@ -444,7 +616,7 @@ function buildCard(r) {
     const ul = el("ul", "reasons");
     why.forEach((x) => {
       const li = el("li", x.level);
-      li.append(icon(LEVEL_ICON[x.level] || "info"), el("span", null, x.text));
+      li.append(icon(LEVEL_ICON[x.level] || "info"), el("span", null, reasonVi(x.text)));
       ul.appendChild(li);
     });
     body.appendChild(ul);
@@ -492,11 +664,11 @@ function buildCard(r) {
     b.classList.add("loading");
     try {
       await call("POST", "/api/decide", { id: r.id, choice, note: choice === "m" ? note.value : "", code: codeIn ? codeIn.value : "" });
-      ok("#" + r.id + ": " + ({ y: "đã duyệt", s: "đã duyệt 30 phút", n: "đã từ chối", m: "đã từ chối kèm lời nhắn" })[choice]);
+      ok("#" + r.id + ": " + ({ y: "đã duyệt", s: "đã cho phép lệnh này 30 phút", n: "đã từ chối", m: "đã từ chối kèm lời nhắn" })[choice]);
       refresh();
     } catch (e) {
       fail(e);
-      buttons.forEach((x) => { x.disabled = false; });
+      if (/no pending request|already decided/.test(e.message)) { c._expire(); refresh(); } else buttons.forEach((x) => { x.disabled = false; });
     } finally {
       wait.classList.add("hidden");
       b.classList.remove("loading");
@@ -508,14 +680,32 @@ function buildCard(r) {
     buttons.push(b);
     return b;
   };
-  actions.append(mk("Duyệt 1 lần", "primary lg", "y", "check"), mk("Duyệt 30 phút", "lg", "s"));
+  actions.append(mk("Duyệt 1 lần", "primary lg", "y", "check"));
+  // The daemon's "s" covers only this exact command on this host for 30 minutes; it refuses it for destructive.
+  const sticky = r.level === "destructive" || r.level === "forbidden" ? null : mk("Cho phép lệnh này 30 phút", "", "s");
+  if (sticky) {
+    sticky.title = "Chỉ đúng lệnh này, trên host này, trong 30 phút. Lệnh khác vẫn phải duyệt.";
+    actions.appendChild(sticky);
+  }
   actions.appendChild(el("span", "sp"));
   const toggle = button("Từ chối kèm lời nhắn", "ghost");
   toggle.addEventListener("click", () => { noteRow.classList.toggle("hidden"); if (!noteRow.classList.contains("hidden")) note.focus(); });
   actions.append(toggle, mk("Từ chối", "danger lg", "n", "x"));
   body.appendChild(actions);
+  if (sticky) body.appendChild(el("p", "stickyhint", "\u201C30 phút\u201D chỉ áp dụng cho đúng lệnh này trên host này; lệnh khác vẫn phải duyệt."));
   noteRow.append(note, mk("Gửi lời từ chối", "danger", "m"));
   body.appendChild(noteRow);
+  const gone = el("div", "expiredmsg hidden", "Yêu cầu đã hết hạn hoặc đã được xử lý");
+  gone.setAttribute("role", "status");
+  body.appendChild(gone);
+  c._expire = () => { // no longer pending: nothing to click; the next refresh drops the card
+    c._gone = true;
+    c.classList.add("expired");
+    buttons.concat([toggle]).forEach((x) => { x.disabled = true; });
+    if (codeIn) codeIn.disabled = true;
+    note.disabled = true;
+    gone.classList.remove("hidden");
+  };
   note.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); noteRow.lastChild.click(); } });
   return c;
 }
@@ -527,6 +717,7 @@ function tickCards() {
     c._when.textContent = relTime(r.time);
     if (!c._bar) return;
     const rem = Math.max(0, Math.round((new Date(r.expires) - Date.now()) / 1000));
+    if (rem === 0 && !c._gone) c._expire();
     c._when.textContent += rem > 0 ? " · còn " + Math.floor(rem / 60) + ":" + String(rem % 60).padStart(2, "0") : " · đã hết hạn";
     const total = new Date(r.expires) - new Date(r.time);
     const left = new Date(r.expires) - Date.now();
@@ -561,13 +752,44 @@ async function loadPending() {
   tickCards();
 }
 
+// reload approves whatever is on disk now, so say what that is before asking.
+function confirmReload() {
+  const changed = status && status.UserOnly;
+  return confirmBox("Đọc lại cấu hình?",
+    (changed ? "hosts.toml và/hoặc rules.toml đã thay đổi trên đĩa kể từ lần duyệt trước. " : "") +
+    "Đọc lại sẽ duyệt mọi thay đổi trong hai file đó (host mới, allow/deny, quy tắc). " +
+    "Hãy mở và xem trước khi duyệt, nhất là nếu bạn không tự sửa.",
+    { info: "~/.config/ostiary/hosts.toml\n~/.config/ostiary/rules.toml\n(Windows: %AppData%\\ostiary)", ok: changed ? "Tôi đã kiểm tra, đọc lại" : "Đọc lại", danger: !!changed });
+}
+// trust: compare the key the server presents now with what known_hosts pins.
+async function confirmTrust(name, info) {
+  const fpNew = (info.match(/SHA256:\S+/) || [""])[0];
+  let old = [];
+  try { old = (await call("GET", "/api/knownhosts")).filter((k) => k.name === name).map((k) => k.fingerprint); } catch (e) { /* no known_hosts: treat as first trust */ }
+  const changed = old.length > 0 && fpNew && !old.includes(fpNew);
+  if (!changed) {
+    return confirmBox("Xác nhận host key", old.length ? "Host key không đổi so với known_hosts." : "Lần đầu tin host key này. So sánh fingerprint với giá trị bạn mong đợi.", { info, ok: "Tiếp tục" });
+  }
+  const box = el("div", "hkchange");
+  box.setAttribute("role", "alert");
+  const fp = (lab, v) => { const d = el("div", "hkfp"); d.append(el("span", null, lab), document.createTextNode(v)); return d; };
+  box.append(el("b", null, "Host key ĐÃ THAY ĐỔI"),
+    el("div", null, "Máy chủ đang gửi host key khác với host key đã lưu. Có thể server vừa được cài lại, nhưng cũng có thể ai đó đang chen vào giữa (MITM)."),
+    fp("Đang tin (known_hosts):", old.join("\n")), fp("Máy chủ đang gửi:", fpNew),
+    el("div", null, "Chỉ tiếp tục nếu bạn biết lý do. Hãy xác minh fingerprint qua kênh khác (hỏi quản trị viên, xem trên console của server)."));
+  return confirmBox("Host key ĐÃ THAY ĐỔI", "Tin host key mới sẽ thay thế host key đang lưu cho " + info.split(" host key:")[0] + ".", { nodes: [box], ok: "Tin host key mới", danger: true });
+}
+
 // ---- admin helper: begin -> (info confirm) -> (OS dialog or code) -> commit ----
 async function admin(op, name, extra) {
+  if (VAULT_OPS.has(op) && !(await needVault())) return null;
+  if (op === "reload" && !(await confirmReload())) return null;
   const b = await call("POST", "/api/admin/begin", { op, name });
   let code = "";
-  if (b.Info) {
-    const t = op === "trust" ? "Xác nhận host key" : "Xác nhận thao tác";
-    if (!(await confirmBox(t, "So sánh với fingerprint bạn mong đợi trước khi tiếp tục.", { info: b.Info, ok: "Tiếp tục" }))) return null;
+  if (op === "trust" && b.Info) {
+    if (!(await confirmTrust(name, b.Info))) return null;
+  } else if (b.Info) {
+    if (!(await confirmBox("Xác nhận thao tác", "Kiểm tra thông tin trước khi tiếp tục.", { info: b.Info, ok: "Tiếp tục" }))) return null;
   }
   let wait = null;
   if (!b.OSAuth) {
@@ -599,12 +821,12 @@ function initials(name) {
 }
 const addrOf = (h) => (h.user ? h.user + "@" : "") + h.host + ":" + (h.port || 22);
 let hostMode = "grid";
-try { hostMode = localStorage.getItem("agentssh-hostview") === "list" ? "list" : "grid"; } catch (e) { /* ignore */ }
+try { hostMode = localStorage.getItem("ostiary-hostview") === "list" ? "list" : "grid"; } catch (e) { /* ignore */ }
 document.querySelectorAll('input[name="hostview"]').forEach((r) => {
   r.checked = r.value === hostMode;
   r.addEventListener("change", () => {
     hostMode = r.value;
-    try { localStorage.setItem("agentssh-hostview", hostMode); } catch (e) { /* ignore */ }
+    try { localStorage.setItem("ostiary-hostview", hostMode); } catch (e) { /* ignore */ }
     renderHosts();
   });
 });
@@ -640,7 +862,7 @@ function hostCard(name, h) {
   av.style.setProperty("--h", String(hashHue(name)));
   const main = el("div", "main");
   main.append(el("div", "name", name), el("div", "sub", addrOf(h)));
-  main.title = h.description || "";
+  main.title = addrOf(h) + (h.description ? "\n" + h.description : "");
   main.tabIndex = 0;
   main.setAttribute("role", "button");
   main.setAttribute("aria-label", "Sửa host " + name);
@@ -654,8 +876,8 @@ function hostCard(name, h) {
     e.stopPropagation();
     menu(kb, [
       ["Sửa", "pencil", () => openHostDrawer(name, h).catch(fail)],
-      ["Trust host key", "shieldcheck", () => trustHost(name)],
-      ["Copy user@host", "copy", () => copyText((h.user ? h.user + "@" : "") + h.host)],
+      ["Tin host key", "shieldcheck", () => trustHost(name)],
+      ["Sao chép user@host", "copy", () => copyText((h.user ? h.user + "@" : "") + h.host)],
       null,
       ["Xóa", "trash", () => removeHost(name), true],
     ]);
@@ -675,7 +897,7 @@ function hostCard(name, h) {
     const hk = el("button", "pill warn pillbtn");
     hk.type = "button";
     hk.title = "Bấm để kiểm tra fingerprint và tin host key";
-    hk.append(icon("shieldcheck", 12), document.createTextNode("host key chưa tin · Trust"));
+    hk.append(icon("shieldcheck", 12), document.createTextNode("host key chưa tin · Tin"));
     hk.addEventListener("click", (e) => { e.stopPropagation(); trustHost(name).catch(fail); });
     tags.appendChild(hk);
   }
@@ -757,9 +979,11 @@ function chipInput(initial, placeholder, label) {
 }
 
 async function openHostDrawer(name, h) {
+  if (!(await needVault())) return;
   let locked = false;
   const keys = await call("GET", "/api/keys").catch(() => { locked = !!(status && status.Locked); return []; });
   const layer = openLayer("drawer", name ? "Sửa host " + name : "Thêm host");
+  layer.onClose = () => { if (view === "setup") loadSetup().catch(fail); refresh(); };
   const form = el("form");
   form.noValidate = true;
   form.id = "hostform";
@@ -779,7 +1003,7 @@ async function openHostDrawer(name, h) {
   const fName = field("Tên", iName, name ? "Tên không đổi được sau khi tạo." : "Agent gọi host bằng tên này.");
   const fHost = field("Địa chỉ", iHost);
   const fPort = field("Port", iPort);
-  const fUser = field("User", iUser);
+  const fUser = field("Người dùng SSH", iUser);
   const row = el("div", "two");
   row.append(fHost, fPort);
   const fKey = field("Key trong vault", sel, "Chọn key hoặc mật khẩu đã lưu ở Kho khóa.");
@@ -787,7 +1011,7 @@ async function openHostDrawer(name, h) {
 
   const prof = el("div", "seg");
   prof.setAttribute("role", "radiogroup");
-  prof.setAttribute("aria-label", "Profile");
+  prof.setAttribute("aria-label", "Mức quyền");
   const cur = (h && h.profile) || "standard";
   ["readonly", "standard", "full"].forEach((p) => {
     const l = el("label");
@@ -797,7 +1021,7 @@ async function openHostDrawer(name, h) {
     prof.appendChild(l);
   });
   const fProf = el("div", "field");
-  fProf.append(el("div", "lab", "Profile"), prof, el("div", "hint", "readonly chỉ đọc; standard cho lệnh thông thường; full gần như không giới hạn (vẫn qua duyệt)."));
+  fProf.append(el("div", "lab", "Mức quyền"), prof, el("div", "hint", "readonly chỉ đọc; standard cho lệnh thông thường; full gần như không giới hạn (vẫn qua duyệt)."));
 
   const sw = el("label", "switch");
   const cb = el("input");
@@ -860,12 +1084,29 @@ async function loadKeychain() {
   hostData = await call("GET", "/api/hosts").catch(() => hostData);
   const hero = $("vaultcard");
   hero.replaceChildren();
+  const miss = !!status.VaultMissing;
+  $("keygen").parentNode.classList.toggle("hidden", miss);
+  if (miss) {
+    hero.className = "card vault-hero locked";
+    const big = el("div", "big");
+    big.appendChild(icon("lock"));
+    const txt = el("div", "txt");
+    txt.append(el("h2", null, "Chưa có vault"), el("p", "muted", "Tạo vault ở màn Bắt đầu để lưu key và mật khẩu SSH."));
+    const ctl = el("div", "ctl");
+    const b = button("Tạo vault", "primary", "plus");
+    b.addEventListener("click", () => { location.hash = "#setup"; });
+    ctl.appendChild(b);
+    hero.append(big, txt, ctl);
+    $("keylist").replaceChildren(emptyLine("Chưa có vault, nên chưa có key nào."));
+    $("pwlist").replaceChildren(emptyLine("Chưa có vault, nên chưa lưu mật khẩu nào."));
+    return;
+  }
   hero.className = "card vault-hero " + (status.Locked ? "locked" : "open");
   const big = el("div", "big");
   big.appendChild(icon(status.Locked ? "lock" : "unlock"));
   const txt = el("div", "txt");
   txt.append(el("h2", null, status.Locked ? "Vault đang khóa" : "Vault đang mở"),
-    el("p", "muted", "Chế độ: " + (status.Passphrase ? "passphrase" : "keyring của hệ điều hành") + (status.VaultMissing ? " — chưa có vault, tạo key đầu tiên để khởi tạo." : "")));
+    el("p", "muted", "Chế độ: " + (status.Passphrase ? "passphrase" : "keyring của hệ điều hành")));
   const ctl = el("div", "ctl");
   let pass = null;
   if (status.Locked && status.Passphrase) {
@@ -929,7 +1170,7 @@ function keyItem(k, isPw) {
     if (fp) {
       const f = el("span", "fp", shortFp(fp));
       f.title = fp;
-      f.appendChild(copyBtn(fp, "Copy fingerprint"));
+      f.appendChild(copyBtn(fp, "Sao chép fingerprint"));
       tags.appendChild(f);
     }
   }
@@ -943,7 +1184,7 @@ function keyItem(k, isPw) {
     const msg = users.length ? "Đang được dùng bởi: " + users.join(", ") + ". Các host này sẽ không đăng nhập được nữa." : "Hành động này không hoàn tác được.";
     if (!(await confirmBox("Xóa " + (isPw ? "mật khẩu " : "key ") + k.name + "?", msg, { ok: "Xóa", danger: true }))) return;
     const o = await admin("key-rm", k.name);
-    if (o) { ok(o); loadKeychain().catch(fail); }
+    if (o) { ok(o); loadKeychain().catch(fail); afterKeyAction(); }
   }));
   c.appendChild(del);
   return c;
@@ -953,30 +1194,37 @@ async function showPublicKey(name, pub) {
   const l = openLayer("modal", "Đã tạo key " + name);
   l.body.appendChild(el("p", null, "Thêm public key này vào ~/.ssh/authorized_keys của user trên server, rồi gán key cho host."));
   const box = el("div", "cmdbox");
-  box.append(el("pre", "keycode", pub), copyBtn(pub, "Copy public key"));
+  box.append(el("pre", "keycode", pub), copyBtn(pub, "Sao chép public key"));
   box.firstChild.style.paddingRight = "44px";
   l.body.appendChild(box);
   const done = button("Xong", "primary");
   done.addEventListener("click", l.close);
-  const cp = button("Copy public key", "", "copy");
+  const cp = button("Sao chép public key", "", "copy");
   cp.addEventListener("click", () => copyText(pub));
   l.foot.append(cp, done);
   done.focus();
 }
-$("keygen").addEventListener("click", async () => {
+const afterKeyAction = () => { if (view === "setup") loadSetup().catch(fail); refresh(); };
+$("keygen").addEventListener("click", genKey);
+$("keyimport").addEventListener("click", importKey);
+$("pwimport").addEventListener("click", savePassword);
+async function genKey() {
   try {
+    if (!(await needVault())) return;
     const v = await askForm({ title: "Tạo key ed25519", desc: "Key mới được sinh và lưu trong vault; private key không rời khỏi daemon.", ok: "Tạo key", fields: [{ name: "name", label: "Tên key", placeholder: "vd: web1-agent", required: true }] });
     if (!v) return;
     const pub = await admin("key-gen", v.name.trim());
     if (!pub) return;
     loadKeychain().catch(fail);
+    afterKeyAction();
     showPublicKey(v.name.trim(), pub);
   } catch (e) { fail(e); }
-});
-$("keyimport").addEventListener("click", async () => {
+}
+async function importKey() {
   try {
+    if (!(await needVault())) return;
     const v = await askForm({
-      title: "Import key", desc: "Chọn file private key (OpenSSH hoặc PEM). Key được chuẩn hóa rồi lưu vào vault.", ok: "Import",
+      title: "Nhập key", desc: "Chọn file private key (OpenSSH hoặc PEM). Key được chuẩn hóa rồi lưu vào vault.", ok: "Import",
       fields: [
         { name: "name", label: "Tên key", required: true },
         { name: "file", label: "File private key", type: "file", required: true, errmsg: "Chọn một file" },
@@ -985,20 +1233,21 @@ $("keyimport").addEventListener("click", async () => {
     });
     if (!v) return;
     const o = await admin("key-import", v.name.trim(), { key: await v.file.text(), keyPassphrase: v.pass });
-    if (o) { ok(o); loadKeychain().catch(fail); }
+    if (o) { ok(o); loadKeychain().catch(fail); afterKeyAction(); }
   } catch (e) { fail(e); }
-});
-$("pwimport").addEventListener("click", async () => {
+}
+async function savePassword() {
   try {
+    if (!(await needVault())) return;
     const v = await askForm({
       title: "Lưu mật khẩu", desc: "Dùng khi server chỉ cho đăng nhập bằng mật khẩu. Nên ưu tiên key.", ok: "Lưu",
       fields: [{ name: "name", label: "Tên mục", required: true }, { name: "pw", label: "Mật khẩu", type: "password", required: true }],
     });
     if (!v) return;
     const o = await admin("key-import", v.name.trim(), { password: v.pw });
-    if (o) { ok(o); loadKeychain().catch(fail); }
+    if (o) { ok(o); loadKeychain().catch(fail); afterKeyAction(); }
   } catch (e) { fail(e); }
-});
+}
 
 // ---- known hosts ----
 let khData = [];
@@ -1014,15 +1263,15 @@ function renderKnownHosts() {
   const rows = khData.filter((k) => !q || (k.host + " " + k.fingerprint + " " + (k.name || "")).toLowerCase().includes(q));
   if (!rows.length) {
     const e = el("div", "empty");
-    e.append(icon("fingerprint", 40), el("h3", null, khData.length ? "Không có mục khớp" : "known_hosts đang trống"), el("p", null, "Host key được ghi lại khi bạn Trust một host ở màn hình Host."));
+    e.append(icon("fingerprint", 40), el("h3", null, khData.length ? "Không có mục khớp" : "known_hosts đang trống"), el("p", null, "Host key được ghi lại khi bạn tin một host (màn hình Host hoặc CLI)."));
     box.appendChild(e);
     return;
   }
   const card = el("div", "card");
   const wrap = el("div", "tablewrap");
-  const t = el("table");
+  const t = el("table", "cards stack");
   const hr = el("tr");
-  ["Host", "Loại", "Fingerprint", "Host agentssh", ""].forEach((h) => hr.appendChild(el("th", null, h)));
+  ["Host", "Loại", "Fingerprint", "Host ostiary", ""].forEach((h) => hr.appendChild(el("th", null, h)));
   t.appendChild(el("thead")).appendChild(hr);
   const tb = el("tbody");
   rows.forEach((k) => {
@@ -1031,18 +1280,19 @@ function renderKnownHosts() {
     const ty = el("td"); ty.appendChild(el("span", "pill accent", k.type.replace(/^ssh-/, ""))); tr.appendChild(ty);
     const fp = el("td", "mono nowrap", shortFp(k.fingerprint));
     fp.title = k.fingerprint;
-    fp.appendChild(copyBtn(k.fingerprint, "Copy fingerprint"));
+    fp.appendChild(copyBtn(k.fingerprint, "Sao chép fingerprint"));
     tr.appendChild(fp);
     const nm = el("td");
     if (k.name) nm.appendChild(el("span", "pill ok", k.name)); else nm.appendChild(el("span", "muted", "-"));
     tr.appendChild(nm);
     const act = el("td");
     if (k.name) {
-      const b = button("Trust lại", "", "shieldcheck");
+      const b = button("Tin lại host key", "", "shieldcheck");
       b.addEventListener("click", () => busy(b, async () => { const o = await admin("trust", k.name); if (o) { ok(o); loadKnownHosts().catch(fail); } }));
       act.appendChild(b);
     }
     tr.appendChild(act);
+    Array.from(tr.children).forEach((c, i) => { c.dataset.label = ["Host", "Loại", "Fingerprint", "Host ostiary", ""][i]; });
     tb.appendChild(tr);
   });
   t.appendChild(tb);
@@ -1058,16 +1308,40 @@ async function loadChecks() {
   box.replaceChildren();
   checks.forEach((c) => {
     const d = el("div", "card hcard " + (c.ok ? "ok" : "warn"));
-    d.append(icon(c.ok ? "check" : "alert"), el("span", null, c.text));
+    d.append(icon(c.ok ? "check" : "alert"), el("span", null, checkVi(c.text)));
     box.appendChild(d);
   });
 }
 $("rehealth").addEventListener("click", (e) => busy(e.currentTarget, loadChecks));
 
+const DECISION_VI = { allow: "tự cho phép", approved: "đã duyệt", denied: "từ chối", forbidden: "cấm", blocked: "chặn", timeout: "hết hạn", error: "lỗi", ask: "hỏi" };
+const fmtTime = (iso) => new Date(iso).toLocaleString("vi-VN");
+// doctorChecks (internal/cli/human.go) texts; [regexp, replacement]. Unknown text stays as is.
+const CHECK_VI = [
+  [/^daemon is running$/, "Daemon đang chạy"],
+  [/^daemon is not running.*/, "Daemon chưa chạy"],
+  [/^daemon status: (.*)$/, "Không đọc được trạng thái daemon: $1"],
+  [/^no vault; run 'ostiary init'$/, "Chưa có vault: tạo ở màn hình Hướng dẫn"],
+  [/^vault is locked; run 'ostiary unlock'$/, "Vault đang khóa: mở khóa bằng chip vault ở góc trên"],
+  [/^vault is unlocked$/, "Vault đã mở khóa"],
+  [/^config changed on disk;.*/, "Cấu hình trên đĩa đã đổi: agent bị từ chối cho đến khi bạn đọc lại ở màn hình Host"],
+  [/^approvals use OS authentication$/, "Duyệt bằng xác thực của hệ điều hành"],
+  [/^approvals use codes from desktop notifications \((.*)\)$/, "Duyệt bằng mã trong thông báo trên máy ($1)"],
+  [/^UI on (.*)$/, "Giao diện web chạy tại $1"],
+  [/^UI is not running.*/, "Giao diện web chưa chạy"],
+  [/^(\w+): ostiary hook installed$/, "$1: hook của Ostiary đã cài"],
+  [/^(\w+): ostiary hook not installed; direct ssh is not blocked.*/, "$1: hook của Ostiary chưa cài, nên agent vẫn có thể chạy ssh trực tiếp (cài ở màn hình Hướng dẫn)"],
+  [/^desktop notification sent.*/, "Đã gửi thông báo thử: hãy kiểm tra bạn có thấy nó"],
+  [/^desktop notifications do not work \((.*?)\):.*/, "Thông báo trên máy không hoạt động ($1): mã duyệt sẽ hiện trong terminal, nên nên dùng chế độ xác thực hệ điều hành"],
+  [/^the ostiary service starts before your desktop session.*/, "Dịch vụ Ostiary khởi động trước phiên desktop (unit cũ): cập nhật ở màn hình Hướng dẫn"],
+  [/^(.*) has no passphrase: agents running as you can read it$/, "$1 không có passphrase: agent chạy cùng tài khoản của bạn có thể đọc được"],
+];
+const checkVi = (t) => { for (const [re, to] of CHECK_VI) if (re.test(t)) return t.replace(re, to); return t; };
 function decisionPill(d) {
   const cls = { allow: "ok", approved: "ok", denied: "bad", blocked: "bad", error: "bad", forbidden: "forbidden", timeout: "warn", ask: "accent" }[d] || "neutral";
-  return el("span", "pill " + cls, d);
+  return el("span", "pill " + cls, DECISION_VI[d] || d);
 }
+const AUDIT_COLS = ["Thời gian", "#", "Project", "Agent", "Host", "Mức", "Quyết định", "Exit", "Lệnh"];
 async function loadAudit() {
   const q = new URLSearchParams({ host: $("fhost").value.trim(), project: $("fproject").value.trim(), decision: $("fdecision").value, since: $("fsince").value, limit: PAGE, offset: auditOffset });
   const r = await call("GET", "/api/audit?" + q);
@@ -1076,7 +1350,7 @@ async function loadAudit() {
   r.entries.forEach((e) => {
     const tr = el("tr", e.id ? "click" : "");
     const td = (cls, ...kids) => { const t = el("td", cls); kids.forEach((k) => t.append(k)); tr.appendChild(t); return t; };
-    td("nowrap", new Date(e.time).toLocaleString());
+    td("nowrap", fmtTime(e.time));
     td("nowrap", e.id ? "#" + e.id : "");
     const proj = e.repo || e.cwd || "";
     td("nowrap", proj.split(/[\\/]/).filter(Boolean).pop() || proj).title = proj + (e.repo && e.cwd && e.cwd !== e.repo ? "\ncwd: " + e.cwd : "");
@@ -1093,8 +1367,9 @@ async function loadAudit() {
       tr.setAttribute("role", "button");
       tr.setAttribute("aria-label", "Xem output #" + e.id);
       tr.addEventListener("click", () => showOutput(e.id).catch(fail));
-      tr.addEventListener("keydown", (ev) => { if (ev.key === "Enter") showOutput(e.id).catch(fail); });
+      tr.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); showOutput(e.id).catch(fail); } });
     }
+    Array.from(tr.children).forEach((t, i) => { t.dataset.label = AUDIT_COLS[i]; });
     rows.appendChild(tr);
   });
   if (!r.entries.length) {
@@ -1120,16 +1395,20 @@ async function showOutput(id) {
   const go = button("Lọc", "primary");
   bar.append(sb, go);
   const pre = el("pre", "outpre", "Đang tải…");
-  l.body.append(bar, pre);
+  const errLine = el("div", "err");
+  errLine.setAttribute("role", "alert");
+  l.body.append(bar, errLine, pre);
   let text = "";
   const load = async () => {
-    const r = await call("GET", "/api/out/" + id + "?grep=" + encodeURIComponent(grep.value)).catch((e) => ({ text: e.message }));
-    text = r.text || "";
-    pre.textContent = text || "(trống)";
+    let r;
+    try { r = await call("GET", "/api/out/" + id + "?grep=" + encodeURIComponent(grep.value)); } catch (e) { r = null; errLine.textContent = friendlyError(e.message); }
+    if (r) errLine.textContent = "";
+    text = r ? r.text || "" : ""; // an error is never copyable as output
+    pre.textContent = r ? text || "Lệnh không in gì" : "";
   };
   go.addEventListener("click", () => busy(go, load));
   grep.addEventListener("keydown", (e) => { if (e.key === "Enter") go.click(); });
-  const cp = button("Copy", "", "copy");
+  const cp = button("Sao chép", "", "copy");
   cp.addEventListener("click", () => copyText(text));
   const close = button("Đóng", "primary");
   close.addEventListener("click", l.close);
@@ -1148,6 +1427,8 @@ $("next").addEventListener("click", () => { auditOffset += PAGE; loadAudit().cat
 // ---- live updates ----
 async function refresh() {
   try { await loadStatus(); await loadPending(); } catch (e) { fail(e); }
+  await setupGate();
+  if (view === "setup" && !document.activeElement.matches("input")) loadSetup().catch(fail);
   if (view === "hosts") loadHosts().catch(fail);
   if (view === "keychain" && !document.activeElement.matches("input")) loadKeychain().catch(fail);
 }
@@ -1158,9 +1439,223 @@ function conn(good) {
 const es = new EventSource("/events");
 let sseErrors = 0;
 let esOpened = false;
-es.onopen = () => { conn(true); if (esOpened) refresh(); esOpened = true; }; // resync what a drop missed
+es.onopen = () => { conn(true); if (upgradeWait) { upgradeWait.close(); upgradeWait = null; } if (esOpened) refresh(); esOpened = true; }; // resync what a drop missed
 es.addEventListener("update", () => { sseErrors = 0; conn(true); refresh(); });
-es.onerror = () => { conn(false); if (++sseErrors === 3) toast("Mất kết nối tới daemon agentssh", "error"); };
+let upgradeTimer = 0;
+es.onerror = () => { conn(false); if (upgradeWait && !upgradeTimer) upgradeTimer = setTimeout(() => { if (upgradeWait) sessionLost(); }, 4000); /* the new daemon has another port: this tab cannot reconnect */ call("GET", "/api/status").catch(() => {}); /* a 401 here means the session is gone, not the daemon */ if (++sseErrors === 3 && !sessionDead) toast("Mất kết nối tới daemon ostiary", "error"); };
+// ---- setup ("Bắt đầu") ----
+const AGENT_NAMES = { claude: "Claude Code", codex: "Codex", gemini: "Gemini CLI", antigravity: "Antigravity" };
+let setupGated = false;
+const initialHash = location.hash;
+// Usable = the agent may see it, it has a key or password, and its host key is trusted.
+const hostGaps = (n, h) => [!h.agent && "chưa bật 'agent'", !h.key && "chưa gán key hoặc mật khẩu", !hostData.Trusted[n] && "chưa Trust host key"].filter(Boolean);
+const usableHosts = () => Object.keys(hostData.Hosts).filter((n) => !hostGaps(n, hostData.Hosts[n]).length);
+function setupSteps(r) {
+  return [r.VaultReady, usableHosts().length > 0, r.Keys > 0, (r.Agents || []).some((a) => a.Detected && a.Installed), r.Autostart];
+}
+function updateChip(r) {
+  const n = setupSteps(r).filter(Boolean).length;
+  const c = $("setupchip");
+  c.classList.toggle("hidden", n === 5); // stays while unfinished, even if the guide was skipped (the only way back on narrow screens)
+  c.textContent = "Thiết lập " + n + "/5";
+}
+// First refresh after load: show the checklist when onboarding is unfinished
+// (a #req=N or other deep link always wins).
+async function setupGate() {
+  const first = !setupGated;
+  setupGated = true;
+  let r;
+  try { r = await call("GET", "/api/setup"); } catch (e) { return; }
+  hostData = await call("GET", "/api/hosts").catch(() => hostData);
+  updateChip(r);
+  if (first && !initialHash && (!r.VaultReady || (!r.Skipped && setupSteps(r).some((d) => !d)))) location.hash = "#setup";
+}
+async function setupAct(b, fn) { // run an action button, then re-render
+  await busy(b, async () => { await fn(); });
+  await loadSetup().catch(fail);
+  refresh();
+}
+function stepCard(n, o) {
+  const c = el("li", "step" + (o.done ? " done" : "") + (o.current ? " current" : "") + (o.optional ? " optional" : "") + (o.warn ? " warn" : ""));
+  const ic = el("span", "stepic");
+  if (o.done) ic.appendChild(icon("check")); else if (o.warn) ic.textContent = "!"; else ic.textContent = o.optional ? "+" : String(n);
+  const body = el("div", "stepbody");
+  const head = el("div", "stephead");
+  head.appendChild(el("h2", null, o.title));
+  if (o.done) head.appendChild(el("span", "pill ok", "Xong"));
+  else if (o.warn) head.appendChild(el("span", "pill warn", "Cần cho agent"));
+  else if (o.optional) head.appendChild(el("span", "pill", "Tùy chọn"));
+  body.append(head, el("p", "muted", o.desc));
+  if (o.hint) body.appendChild(el("p", "hint", o.hint));
+  if (o.controls && o.controls.length) { const a = el("div", "stepact"); a.append(...o.controls); body.appendChild(a); }
+  if (o.extra) body.appendChild(o.extra);
+  c.append(ic, body);
+  return c;
+}
+async function passphraseInit() {
+  const v = await askForm({
+    title: "Dùng passphrase", desc: "Vault được mã hóa bằng passphrase này; bạn nhập lại mỗi lần mở khóa. Ostiary không thể khôi phục nếu bạn quên.", ok: "Tạo vault",
+    fields: [{ name: "p1", label: "Passphrase", type: "password", required: true, autocomplete: "new-password" }, { name: "p2", label: "Nhập lại", type: "password", required: true, autocomplete: "new-password" }],
+  });
+  if (!v) return;
+  if (v.p1.length < 8) throw new Error("Passphrase cần ít nhất 8 ký tự");
+  if (v.p1 !== v.p2) throw new Error("Hai passphrase không khớp");
+  return admin("init", "passphrase", { pass: v.p1 });
+}
+async function loadSetup() {
+  await loadStatus();
+  const r = await call("GET", "/api/setup");
+  hostData = await call("GET", "/api/hosts").catch(() => hostData);
+  updateChip(r);
+  const box = $("setupbox");
+  const ready = r.VaultReady, locked = r.Locked;
+  const done = setupSteps(r);
+  const n = done.filter(Boolean).length;
+  const cur = done.indexOf(false);
+  const out = [];
+
+  const head = el("div", "setuphead");
+  const bar = el("div", "progress");
+  bar.setAttribute("role", "img");
+  bar.setAttribute("aria-label", "Đã xong " + n + " trên 5 bước");
+  done.forEach((_, i) => bar.appendChild(el("span", i < n ? "on" : ""))); // a count, not a per-step map
+  const ht = el("div", "txt");
+  ht.append(el("h2", null, n === 5 ? "Mọi thứ đã sẵn sàng" : "Thiết lập Ostiary"), el("p", "muted", n === 5 ? "Cả 5 bước đã xong." : "Làm lần lượt từng bước để agent dùng được SSH an toàn."));
+  head.append(ht, el("span", "count5", n + "/5"), bar);
+
+  // 1 vault
+  const c1 = [];
+  if (!ready) {
+    const b = button("Tạo vault", "primary lg");
+    b.addEventListener("click", () => setupAct(b, async () => { const o = await admin("init", "keyring"); if (o) ok(o); }));
+    const l = button("Dùng passphrase thay vì keyring", "ghost");
+    l.addEventListener("click", () => setupAct(l, async () => { const o = await passphraseInit(); if (o) ok(o); }));
+    c1.push(b, l);
+  } else if (locked) {
+    const b = button("Mở khóa", "primary lg", "unlock");
+    b.addEventListener("click", () => setupAct(b, toggleVault));
+    c1.push(b);
+  }
+  out.push(stepCard(1, { title: "Tạo vault", desc: ready ? (locked ? "Vault đã có nhưng đang khóa. Mở khóa để tiếp tục." : "Vault lưu private key và mật khẩu, mã hóa trên máy này.") : "Vault là nơi lưu private key và mật khẩu SSH, mã hóa trên máy này.", done: ready, controls: c1 }));
+
+  // 2 host: done only when an agent could really use one
+  const c2 = [];
+  const off = locked || !ready;
+  const hn = Object.keys(hostData.Hosts).sort();
+  const okHosts = usableHosts().length > 0;
+  let ex2 = null;
+  if (r.Hosts <= 0) {
+    const b = button("Thêm host", "primary lg", "plus");
+    b.disabled = off;
+    b.addEventListener("click", () => busy(b, () => openHostDrawer("", null)));
+    c2.push(b);
+  } else if (!okHosts) {
+    ex2 = el("div", "agentrows");
+    hn.slice(0, 5).forEach((n) => {
+      const h = hostData.Hosts[n];
+      const row = el("div", "agentrow");
+      row.append(el("b", null, n), el("span", "muted", hostGaps(n, h).join(", ")));
+      const ed = button("Sửa host");
+      ed.addEventListener("click", () => busy(ed, () => openHostDrawer(n, h)));
+      row.appendChild(ed);
+      if (!hostData.Trusted[n]) {
+        const t = button("Tin host key", "primary");
+        t.addEventListener("click", () => setupAct(t, async () => { const o = await admin("trust", n); if (o) ok(o); }));
+        row.appendChild(t);
+      }
+      ex2.appendChild(row);
+    });
+  }
+  out.push(stepCard(2, { title: "Thêm host", desc: "Máy chủ mà agent sẽ SSH tới. Cần ít nhất một host đã bật 'agent', có key hoặc mật khẩu và đã Trust host key.", done: okHosts, controls: c2, extra: ex2, hint: r.Hosts <= 0 && off ? "Cần tạo và mở khóa vault ở bước 1 trước." : "" }));
+
+  // 3 key
+  const c3 = [["Tạo key", genKey, "plus"], ["Nhập key", importKey, "upload"], ["Lưu mật khẩu", savePassword, "lock"]].map(([t, f, i]) => {
+    const b = button(t, r.Keys > 0 ? "" : "primary", i);
+    b.disabled = off;
+    b.addEventListener("click", () => setupAct(b, f));
+    return b;
+  });
+  out.push(stepCard(3, { title: "Thêm key hoặc mật khẩu", desc: "Thông tin đăng nhập để Ostiary dùng thay agent; agent không bao giờ thấy chúng.", done: r.Keys > 0, controls: r.Keys > 0 ? [] : c3, hint: off && r.Keys <= 0 ? "Cần tạo và mở khóa vault ở bước 1 trước." : "" }));
+
+  // 4 agents
+  const rows = el("div", "agentrows");
+  (r.Agents || []).forEach((a) => {
+    const row = el("div", "agentrow");
+    row.appendChild(el("b", null, AGENT_NAMES[a.Name] || a.Name));
+    row.appendChild(el("span", "pill " + (a.Installed ? "ok" : ""), a.Installed ? "Đã cài" : a.Detected ? "Chưa cài" : "Không thấy trên máy"));
+    if (a.Detected && !a.Installed) {
+      const b = button("Cài", "primary");
+      b.addEventListener("click", () => setupAct(b, async () => { const o = await admin("hooks", a.Name); if (o) ok(o); }));
+      row.appendChild(b);
+    }
+    rows.appendChild(row);
+  });
+  const missing = (r.Agents || []).filter((a) => a.Detected && !a.Installed).map((a) => AGENT_NAMES[a.Name] || a.Name);
+  const ex4 = el("div");
+  if ((r.Agents || []).length) ex4.appendChild(rows);
+  if (missing.length) ex4.appendChild(el("p", "hint", "Chưa cài hook cho " + missing.join(", ") + ": lệnh SSH của agent này chưa đi qua Ostiary."));
+  out.push(stepCard(4, { title: "Kết nối AI agent", desc: "Cài hook để lệnh SSH của agent đi qua Ostiary.", done: done[3], extra: ex4.children.length ? ex4 : null }));
+
+  // 5 autostart
+  const sw = el("label", "switch");
+  const cb = el("input");
+  cb.type = "checkbox"; cb.checked = !!r.Autostart;
+  cb.setAttribute("role", "switch");
+  cb.addEventListener("change", async () => {
+    const want = cb.checked;
+    cb.disabled = true;
+    try {
+      const o = await admin("autostart", want ? "on" : "off");
+      if (o === null) cb.checked = !want; else if (o) ok(o);
+    } catch (e) { cb.checked = !want; fail(e); }
+    cb.disabled = false;
+    loadSetup().catch(fail);
+    refresh();
+  });
+  sw.append(cb, el("span", "track"), el("span", null, r.Autostart ? "Đang bật" : "Đang tắt"));
+  out.push(stepCard(5, { title: "Tự chạy khi đăng nhập", desc: "Ostiary khởi động cùng máy để không bỏ lỡ yêu cầu duyệt.", done: r.Autostart, controls: [sw] }));
+
+  if (r.PolkitMissing) {
+    const cmd = "sudo \"$(command -v ostiary)\" install-polkit";
+    const cb2 = el("div", "cmdbox");
+    cb2.append(el("pre", "cmd", cmd), copyBtn(cmd, "Sao chép lệnh"));
+    const ex = el("div");
+    ex.append(cb2, el("p", "muted", "rồi khởi động lại Ostiary."));
+    out.push(stepCard(6, { title: "Duyệt bằng mật khẩu máy", desc: "Để duyệt bằng hộp thoại mật khẩu của hệ điều hành thay vì mã, chạy một lần trong terminal:", optional: true, extra: ex }));
+  }
+  if (r.CLIHint) { // informational: agents cannot find `ostiary` without it
+    const cb3 = el("div", "cmdbox");
+    cb3.append(el("pre", "cmd", r.CLIHint), copyBtn(r.CLIHint, "Sao chép lệnh"));
+    const ex = el("div");
+    ex.append(cb3, el("p", "muted", "Nếu /usr/local/bin chưa có, chạy `sudo mkdir -p /usr/local/bin` trước."));
+    out.push(stepCard(7, { title: "Lệnh ostiary cho agent", desc: "App macOS không đặt lệnh ostiary vào PATH, nên agent (skill, MCP, hook) sẽ báo không tìm thấy lệnh. Chạy một lần trong terminal:", warn: true, extra: ex }));
+  }
+  const first = out.findIndex((_, i) => i < 5 && !done[i]);
+  if (first >= 0) out[first].classList.add("current");
+
+  const list = el("ol", "steps");
+  list.append(...out);
+  const foot = el("div", "setupfoot");
+  if (n === 5) {
+    const p = el("div", "card success");
+    p.appendChild(icon("shieldcheck"));
+    p.appendChild(el("p", null, "Xong! Agent giờ dùng được các host bạn bật 'agent'."));
+    const g = button("Về màn Duyệt", "primary lg");
+    g.addEventListener("click", () => { location.hash = "#approvals"; });
+    p.appendChild(g);
+    foot.appendChild(p);
+  } else {
+    if (r.VaultReady) {
+      const h = button("Ẩn hướng dẫn", "ghost");
+      h.addEventListener("click", () => busy(h, async () => { await call("POST", "/api/setup/skip", { skip: true }); location.hash = "#approvals"; await setupGate(); }));
+      foot.appendChild(h);
+    }
+  }
+  box.replaceChildren(head, list, foot);
+}
+$("opensetup").addEventListener("click", () => busy($("opensetup"), async () => { await call("POST", "/api/setup/skip", { skip: false }); location.hash = "#setup"; }));
+$("setupchip").addEventListener("click", () => { location.hash = "#setup"; });
+
 function route() { // #req=N focuses a request; #hosts, #keychain... deep-link a view
   const h = location.hash.slice(1);
   showView(Object.hasOwn(VIEWS, h) ? h : "approvals");
