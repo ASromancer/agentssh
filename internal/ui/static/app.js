@@ -61,12 +61,27 @@ async function loadStatus() {
 }
 
 // ---- approvals ----
+// Reason.start/end are UTF-8 byte offsets; JS strings index UTF-16 units.
+function byteToJs(cmd) {
+  const map = [0]; // map[byteOffset] = JS index (continuation bytes map to the same index)
+  let js = 0;
+  for (const ch of cmd) {
+    const cp = ch.codePointAt(0);
+    const n = cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+    for (let k = 1; k <= n; k++) map.push(k === n ? js + ch.length : js);
+    js += ch.length;
+  }
+  return map;
+}
+
 function highlighted(cmd, reasons) {
   const box = el("div", "cmd");
   const marks = new Array(cmd.length).fill(false);
+  const map = byteToJs(cmd);
+  const at = (b) => map[Math.min(Math.max(0, b), map.length - 1)];
   (reasons || []).forEach((r) => {
     if (r.level === "destructive" || r.level === "forbidden") {
-      for (let i = Math.max(0, r.start); i < r.end && i < cmd.length; i++) marks[i] = true;
+      for (let i = at(r.start); i < at(r.end) && i < cmd.length; i++) marks[i] = true;
     }
   });
   let i = 0;
@@ -91,7 +106,7 @@ async function loadPending() {
   box.replaceChildren();
   $("noreq").classList.toggle("hidden", list.length > 0);
   const focus = Number((location.hash.match(/req=(\d+)/) || [])[1]);
-  list.forEach((r) => {
+  list.slice().reverse().forEach((r) => { // newest first
     const c = el("div", "card req" + (r.id === focus ? " focus" : ""));
     const h = el("h2");
     h.appendChild(el("span", "level " + r.level, r.level));
