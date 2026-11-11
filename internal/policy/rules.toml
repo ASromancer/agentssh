@@ -1,0 +1,66 @@
+# Default command rules. First match wins, so specific patterns come first.
+# A pattern matches the normalized command line ("name arg1 arg2 ...");
+# "*" matches anything (including spaces) and every pattern implicitly
+# allows trailing arguments. Commands matching no rule are "mutate".
+# Override or extend in ~/.config/agentssh/rules.toml (same format; user
+# rules are checked before these).
+
+[[rule]]
+level = "destructive"
+match = [
+  "rm", "rmdir", "dd", "mkfs*", "fdisk", "sfdisk", "parted", "shred", "wipefs",
+  "reboot", "shutdown", "poweroff", "halt", "init 0", "init 6",
+  "systemctl stop*", "systemctl disable*", "systemctl mask*",
+  "systemctl * stop*", "systemctl * disable*", "systemctl * mask*",
+  "systemctl reboot*", "systemctl poweroff*", "systemctl halt*",
+  "docker rm*", "docker rmi*", "docker down*", "docker system prune*", "docker volume rm*",
+  "docker volume prune*", "docker container rm*", "docker container prune*",
+  "docker image rm*", "docker image prune*", "docker network rm*", "docker network prune*",
+  "docker compose down*", "docker compose * down*", "docker compose rm*", "docker compose * rm*",
+  "docker-compose down*", "docker-compose * down*", "docker-compose rm*",
+  "kill -9*", "kill * -9*", "kill -KILL*", "kill -SIGKILL*", "kill -s KILL*", "pkill", "killall",
+  "iptables", "ip6tables", "nft", "ufw", "firewall-cmd",
+  "chmod -R*", "chmod * -R*", "chmod --recursive*", "chown -R*", "chown * -R*", "chown --recursive*",
+  "truncate", "crontab -r*", "crontab * -r*",
+  "userdel", "usermod", "groupdel", "passwd", "chpasswd",
+  "apt remove*", "apt purge*", "apt autoremove*", "apt-get remove*", "apt-get purge*", "apt-get autoremove*",
+  "dnf remove*", "yum remove*", "apk del*",
+  "find * -delete*",
+  "git clean*", "git reset --hard*", "git push * --force*", "git push --force*", "git push -f*", "git push * -f*",
+]
+
+[[rule]]
+level = "mutate"
+match = [
+  "sed -i*", "sed * -i*", "sed --in-place*", "sed * --in-place*",
+  "curl -o*", "curl * -o*", "curl -O*", "curl * -O*", "curl *--output*", "curl *--remote-name*",
+  "systemctl restart*", "systemctl reload*", "systemctl start*", "systemctl try-restart*", "systemctl daemon-reload*",
+  "docker restart*", "docker start*", "docker pull*", "docker compose up*", "docker compose * up*", "docker-compose up*",
+  "mkdir", "cp", "mv", "touch", "ln",
+  "apt install*", "apt update*", "apt upgrade*", "apt-get install*", "apt-get update*", "apt-get upgrade*",
+  "dnf install*", "dnf update*", "yum install*", "yum update*", "apk add*", "apk update*",
+  "pip install*", "pip3 install*", "npm install*", "npm i*",
+  "git pull*", "git fetch*", "git checkout*", "git switch*",
+  "kill",
+]
+
+[[rule]]
+level = "read"
+match = [
+  "ls", "cat", "head", "tail", "grep", "egrep", "fgrep", "zgrep", "rg", "awk", "sed",
+  "ps", "pgrep", "df", "du", "free", "uptime", "uname", "whoami", "id", "hostname", "ip", "ss",
+  "netstat", "lsof", "stat", "file", "wc", "sort", "uniq", "date", "env", "printenv", "which",
+  "echo", "printf", "pwd", "cd", "true", "false", "test", "[", "sleep", "basename", "dirname",
+  "realpath", "readlink", "tr", "cut", "jq", "tac", "seq", "nl", "zcat", "md5sum", "sha256sum",
+  "nproc", "lscpu", "lsblk", "findmnt", "mount", "dmesg", "getent", "groups", "w", "who", "last",
+  "systemctl status*", "systemctl is-active*", "systemctl is-enabled*", "systemctl is-failed*",
+  "systemctl list-units*", "systemctl list-unit-files*", "systemctl list-timers*", "systemctl cat*", "systemctl show*",
+  "journalctl",
+  "docker ps*", "docker logs*", "docker inspect*", "docker images*", "docker stats --no-stream*", "docker version*",
+  "docker info*", "docker compose ps*", "docker compose logs*", "docker compose * ps*", "docker compose * logs*",
+  "git status*", "git log*", "git diff*", "git show*", "git branch*", "git remote -v*", "git rev-parse*",
+  "find",
+  "curl",
+  "wget -O-*", "wget * -O-*", "wget -qO-*", "wget * -qO-*", "wget -O -*", "wget * -O -*",
+  "crontab -l*",
+]
