@@ -134,11 +134,12 @@ func (d *Daemon) adminMessage(a *AdminArgs, data any) string {
 }
 
 func (d *Daemon) admin(a *AdminArgs, data any, r *AdminReply) error {
+	var authNow error
 	if a.Op == "reload" {
 		if err := d.loadConfig(); err != nil {
 			return err
 		}
-		d.pickAuth()
+		authNow = d.reloadAuth()
 	}
 	if a.Op == "trust" {
 		cfg, _, _, _ := d.snapshot()
@@ -167,6 +168,8 @@ func (d *Daemon) admin(a *AdminArgs, data any, r *AdminReply) error {
 		r.Out = fmt.Sprintf("reloaded %d hosts; approvals use OS authentication", len(d.cfg.Hosts))
 		if err := d.authProblem(); err != nil {
 			r.Out = fmt.Sprintf("reloaded %d hosts; approvals use codes (%v)", len(d.cfg.Hosts), err)
+		} else if authNow != nil {
+			r.Out += fmt.Sprintf(" (the dialog cannot be shown right now: %v; run 'agentssh doctor')", authNow)
 		}
 	case "host-set", "host-rm":
 		if d.userOnly || ConfigHash() != d.data.ConfigHash {

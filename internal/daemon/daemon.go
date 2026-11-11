@@ -99,13 +99,23 @@ type authOff string
 func (a authOff) Available() error                      { return fmt.Errorf("%w: %s", humanok.ErrUnavailable, string(a)) }
 func (a authOff) Confirm(context.Context, string) error { return a.Available() }
 
-// pickAuth decides how the human is authenticated. It runs at start and
-// on an approved reload only: nothing an agent does to the session later
-// (renaming the display socket, killing the polkit agent) can switch the
-// daemon to codes.
+// pickAuth decides how the human is authenticated, at start. Nothing an
+// agent does to the session later (renaming the display socket, killing
+// the polkit agent) can switch the daemon to codes.
 func (d *Daemon) pickAuth() {
 	err := d.human.Available()
 	d.auth.Store(&err)
+}
+
+// reloadAuth runs on an approved reload. It may switch codes to OS
+// authentication, never back: in OS mode it only returns why the dialog
+// cannot be shown right now.
+func (d *Daemon) reloadAuth() error {
+	if d.osAuth() {
+		return d.human.Available()
+	}
+	d.pickAuth()
+	return nil
 }
 
 // authProblem returns why approvals use codes, or nil when they use OS

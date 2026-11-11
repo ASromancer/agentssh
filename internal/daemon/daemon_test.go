@@ -683,3 +683,22 @@ func TestDialogTimeoutKeepsOSMode(t *testing.T) {
 		t.Fatalf("status %+v", st)
 	}
 }
+
+// An approved reload can switch codes to OS authentication, never back.
+func TestReloadNeverDowngrades(t *testing.T) {
+	h := setup(t)
+	fake := &humanok.Fake{Allow: true}
+	h.useHuman(fake)
+	fake.Err = fmt.Errorf("%w: Wayland display gone", humanok.ErrUnavailable)
+	h.call("Unlock", &UnlockArgs{Pass: "pw"}, &Empty{})
+	var br BeginReply
+	var ar AdminReply
+	h.call("Begin", &BeginArgs{Op: "reload"}, &br)
+	if err := h.call("Admin", &AdminArgs{Ticket: br.Ticket, Op: "reload"}, &ar); err != nil {
+		t.Fatal(err)
+	}
+	var st StatusReply
+	if h.call("Status", &Empty{}, &st); st.Auth != "os" || !strings.Contains(ar.Out, "Wayland display gone") {
+		t.Fatalf("reload downgraded or hid the reason: %+v %q", st, ar.Out)
+	}
+}
