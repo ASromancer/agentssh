@@ -22,16 +22,18 @@ import (
 )
 
 type Request struct {
-	ID      int             `json:"id"`
-	Time    time.Time       `json:"time"`
-	Host    string          `json:"host"`
-	User    string          `json:"user"`
-	Cwd     string          `json:"cwd"`
-	Repo    string          `json:"repo"`
-	Agent   string          `json:"agent"`
-	Kind    string          `json:"kind"`
-	Cmd     string          `json:"cmd"`
-	Level   string          `json:"level"`
+	ID    int       `json:"id"`
+	Time  time.Time `json:"time"`
+	Host  string    `json:"host"`
+	User  string    `json:"user"`
+	Cwd   string    `json:"cwd"`
+	Repo  string    `json:"repo"`
+	Agent string    `json:"agent"`
+	Kind  string    `json:"kind"`
+	Cmd   string    `json:"cmd"`
+	Level string    `json:"level"`
+	// Expires is when the request times out; set by Queue.Add.
+	Expires time.Time       `json:"expires"`
 	Reasons []policy.Reason `json:"reasons"`
 	// Code is only filled in when the desktop notification could not be
 	// sent, so the human can still approve from a terminal (spec 7).
@@ -124,6 +126,7 @@ func (q *Queue) Sticky(host, cmd string) bool {
 // Add registers a request, notifies the human and starts its timeout.
 // It returns whether the notification was delivered.
 func (q *Queue) Add(r Request) bool {
+	r.Expires = time.Now().Add(q.Timeout)
 	e := &entry{req: r, code: NewCode(), done: make(chan Decision, 1)}
 	codes := q.codes()
 	body := fmt.Sprintf("%s: %s [%s] code: %s", r.Host, r.Cmd, r.Level, e.code)

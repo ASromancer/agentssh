@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 
 	"github.com/ASromancer/agentssh/internal/audit"
 	"github.com/ASromancer/agentssh/internal/daemon"
@@ -182,6 +183,15 @@ func (s *Server) routes(mux *http.ServeMux) {
 		}
 		writeJSON(w, checks)
 	})
+	mux.HandleFunc("GET /api/knownhosts", func(w http.ResponseWriter, r *http.Request) {
+		names := map[string]string{} // normalized address -> agentssh host name
+		if hl, err := b.HostList(); err == nil {
+			for name, h := range hl.Hosts {
+				names[knownhosts.Normalize(h.Addr())] = name
+			}
+		}
+		writeJSON(w, readKnownHosts(s.opt.KnownHostsFile, names))
+	})
 	mux.HandleFunc("GET /events", s.events)
 }
 
@@ -314,4 +324,37 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		case <-tick.C:
 		}
 	}
+}
+
+type knownHost struct {
+	Host        string `json:"host"`
+	Type        string `json:"type"`
+	Fingerprint string `json:"fingerprint"`
+	Name        string `json:"name,omitempty"` // matching agentssh host, if any
+}
+
+// readKnownHosts lists known_hosts entries (public data). Unparseable lines
+// and revoked/CA markers are skipped; a missing file gives an empty list.
+func readKnownHosts(path string, names map[string]string) []knownHost {
+	out := []knownHost{}
+	f, err := os.Open(path)
+	if err != nil {
+		return out
+	}
+	defer f.Close()
+	br := bufio.NewReader(f)
+	for {
+		line, err := readLine(br, 64<<10)
+		if len(line) > 0 {
+			if marker, hs, key, _, _, perr := ssh.ParseKnownHosts(line); perr == nil && marker == "" {
+				for _, h := range hs {
+					out = append(out, knownHost{Host: h, Type: key.Type(), Fingerprint: ssh.FingerprintSHA256(key), Name: names[h]})
+				}
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	return out
 }

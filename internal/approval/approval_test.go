@@ -301,3 +301,13 @@ func TestLinuxNotifyArgs(t *testing.T) {
 		t.Fatalf("linked %q", linked)
 	}
 }
+
+func TestExpiresSet(t *testing.T) {
+	q := NewQueue((&sink{}).notify, time.Minute)
+	before := time.Now()
+	q.Add(Request{ID: 3})
+	p := q.Pending()
+	if len(p) != 1 || p[0].Expires.Before(before.Add(time.Minute)) || p[0].Expires.After(time.Now().Add(time.Minute)) {
+		t.Fatalf("%+v", p)
+	}
+}

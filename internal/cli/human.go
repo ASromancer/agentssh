@@ -74,8 +74,8 @@ func cmdDaemon(args []string) int {
 	if !*noUI {
 		srv, err = ui.Start(ui.Options{
 			Backend: ui.ServiceBackend{S: svc}, Port: *uiPort, Version: Version,
-			AuditFile: paths.Audit(),
-			Doctor:    func() []ui.Check { return doctorChecks(false) },
+			AuditFile: paths.Audit(), KnownHostsFile: paths.KnownHosts(),
+			Doctor: func() []ui.Check { return doctorChecks(false) },
 		})
 		if err != nil {
 			log.Printf("ui: %v (continuing without the UI)", err)

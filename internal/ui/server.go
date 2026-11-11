@@ -27,11 +27,12 @@ type Check struct {
 }
 
 type Options struct {
-	Backend   Backend
-	Port      int            // 0 = random
-	Doctor    func() []Check // status checks shown in the UI
-	Version   string
-	AuditFile string // audit.jsonl to read for the log tab
+	Backend        Backend
+	Port           int            // 0 = random
+	Doctor         func() []Check // status checks shown in the UI
+	Version        string
+	AuditFile      string // audit.jsonl to read for the log tab
+	KnownHostsFile string // known_hosts to list (read-only) in the known-hosts tab
 }
 
 type Server struct {

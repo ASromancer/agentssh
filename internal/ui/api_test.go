@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 
 	"github.com/ASromancer/agentssh/internal/approval"
 	"github.com/ASromancer/agentssh/internal/paths"
@@ -203,5 +204,23 @@ func TestReadAuditSkipsHugeLineInMiddle(t *testing.T) {
 	got, total, err := readAudit(f, "", "", "", 10, 0)
 	if err != nil || total != 3 || got[0].ID != 4 || got[2].ID != 1 {
 		t.Fatalf("%v %d %+v", err, total, got)
+	}
+}
+
+func TestKnownHosts(t *testing.T) {
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	k, _ := ssh.NewPublicKey(pub)
+	f := filepath.Join(t.TempDir(), "known_hosts")
+	os.WriteFile(f, []byte(knownhosts.Line([]string{"10.0.0.5"}, k)+"\n# c\nbroken line\n"), 0o600)
+	s := newServer(Options{Backend: &fakeBackend{}, KnownHostsFile: f}, 8123)
+	got := do(t, s, "GET", "/api/knownhosts", "127.0.0.1:8123", "", login(t, s), "", "").Body.String()
+	for _, want := range []string{`"host":"10.0.0.5"`, `"type":"ssh-ed25519"`, ssh.FingerprintSHA256(k), `"name":"web1"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %s in %s", want, got)
+		}
+	}
+	s = newServer(Options{Backend: &fakeBackend{}, KnownHostsFile: f + ".none"}, 8123)
+	if got := do(t, s, "GET", "/api/knownhosts", "127.0.0.1:8123", "", login(t, s), "", "").Body.String(); strings.TrimSpace(got) != "[]" {
+		t.Errorf("missing file: %s", got)
 	}
 }
