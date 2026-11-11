@@ -13,7 +13,17 @@ One static Go binary for Linux, macOS and Windows (amd64, arm64). Apache-2.0.
 
 ## Install
 
-Download a binary from [Releases](https://github.com/ASromancer/ostiary/releases) and put it on your `PATH`, or:
+Get the file for your system from [Releases](https://github.com/ASromancer/ostiary/releases). The builds are not code-signed yet, so each OS warns on first run.
+
+**Windows**: run `Ostiary-Setup-<ver>-x64.exe` (per-user, no admin). SmartScreen: "More info" then "Run anyway". Open Start Menu, Ostiary.
+
+**macOS**: open `Ostiary-<ver>.dmg` and drag Ostiary to Applications. First launch: right-click the app, then Open (unsigned). Optional command-line symlink: `sudo ln -sf /Applications/Ostiary.app/Contents/MacOS/ostiary /usr/local/bin/ostiary`.
+
+**Debian/Ubuntu**: `sudo apt install ./ostiary_<ver>_amd64.deb` (or `arm64`), then open "Ostiary" from the application menu. Optional OS authentication dialog: `sudo "$(command -v ostiary)" install-polkit`.
+
+**Other Linux**: unpack `ostiary-linux-<arch>.tar.gz`, put `ostiary` on your `PATH`, then run `ostiary install-service` (adds the menu entry and autostart).
+
+From source, or to set up from the command line:
 
 ```sh
 CGO_ENABLED=0 go install github.com/ASromancer/ostiary@latest

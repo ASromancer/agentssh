@@ -4,7 +4,7 @@
   <key>CFBundleName</key><string>Ostiary</string>
   <key>CFBundleDisplayName</key><string>Ostiary</string>
   <key>CFBundleIdentifier</key><string>dev.ostiary.app</string>
-  <key>CFBundleExecutable</key><string>Ostiary</string>
+  <key>CFBundleExecutable</key><string>launcher</string>
   <key>CFBundleIconFile</key><string>ostiary</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>@VERSION@</string>
