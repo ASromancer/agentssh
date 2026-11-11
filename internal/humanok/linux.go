@@ -91,11 +91,17 @@ func digits(s string) bool {
 func (platform) Confirm(ctx context.Context, msg string) error {
 	code, out, err := runPkcheck(ctx, "--action-id", ActionID, "--process", strconv.Itoa(os.Getpid()),
 		"--allow-user-interaction", "--detail", "message", msg)
-	return pkResult(code, out, err)
+	return pkResult(code, out, err, ctx.Err() != nil)
 }
 
-func pkResult(code int, out string, err error) error {
+// pkResult maps pkcheck's outcome to an error. killed means the context
+// ended; a pkcheck killed by a signal (exit code -1) counts the same. Both
+// are refusals, never ErrUnavailable: an agent must not be able to force
+// the weaker code mode by killing pkcheck or leaving a dialog open.
+func pkResult(code int, out string, err error, killed bool) error {
 	switch {
+	case killed || (err == nil && code == -1):
+		return fmt.Errorf("%w: confirmation dialog timed out or was interrupted", ErrDenied)
 	case err != nil:
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)
 	case code == pkAuthorized:

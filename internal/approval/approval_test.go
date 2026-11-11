@@ -275,3 +275,18 @@ func TestSendCode(t *testing.T) {
 		t.Fatalf("failed notification should expose the code: %+v", p)
 	}
 }
+
+func TestAddSendsCodeWhenSwitchedMidAdd(t *testing.T) {
+	var bodies []string
+	q := NewQueue(nil, time.Minute)
+	q.UseCodes = func() bool { return false }
+	q.Notify = func(_, body string) error {
+		bodies = append(bodies, body)
+		q.UseCodes = nil // the daemon switches while the first notification is sent
+		return nil
+	}
+	q.Add(Request{ID: 43, Host: "web1", Cmd: "rm x", Level: "destructive"})
+	if len(bodies) != 2 || !strings.Contains(bodies[1], "code: ") {
+		t.Fatalf("bodies %q", bodies)
+	}
+}

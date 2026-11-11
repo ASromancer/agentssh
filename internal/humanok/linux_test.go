@@ -12,19 +12,25 @@ import (
 
 func TestPkResult(t *testing.T) {
 	for _, tc := range []struct {
-		code int
-		err  error
-		want error
+		code   int
+		err    error
+		killed bool
+		want   error
 	}{
-		{0, nil, nil},
-		{1, nil, ErrDenied},
-		{3, nil, ErrDenied},
-		{2, nil, ErrUnavailable},
-		{4, nil, ErrUnavailable},
-		{-1, errors.New("exec: not found"), ErrUnavailable},
+		{0, nil, false, nil},
+		{1, nil, false, ErrDenied},
+		{3, nil, false, ErrDenied},
+		{2, nil, false, ErrUnavailable},
+		{127, nil, false, ErrUnavailable},
+		{4, nil, false, ErrUnavailable},
+		{-1, errors.New("exec: not found"), false, ErrUnavailable},
+		{-1, nil, false, ErrDenied}, // killed by a signal
+		{-1, nil, true, ErrDenied},  // timeout
+		{2, nil, true, ErrDenied},   // context ended first
+		{-1, errors.New("context canceled"), true, ErrDenied},
 	} {
-		if got := pkResult(tc.code, "", tc.err); !errors.Is(got, tc.want) && !(tc.want == nil && got == nil) {
-			t.Errorf("code %d: got %v want %v", tc.code, got, tc.want)
+		if got := pkResult(tc.code, "", tc.err, tc.killed); !errors.Is(got, tc.want) && !(tc.want == nil && got == nil) {
+			t.Errorf("code %d killed %v: got %v want %v", tc.code, tc.killed, got, tc.want)
 		}
 	}
 }
@@ -74,5 +80,16 @@ func TestSetupProblem(t *testing.T) {
 	if err := setupProblem(policy, "bob", func(string) string { return ":0" }, exists); err == nil ||
 		!strings.Contains(err.Error(), "belongs to another user") {
 		t.Errorf("owner message: %v", err)
+	}
+}
+
+func TestConfirmCancelledIsDenied(t *testing.T) {
+	old := runPkcheck
+	runPkcheck = func(context.Context, ...string) (int, string, error) { return -1, "", nil }
+	defer func() { runPkcheck = old }()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := (platform{}).Confirm(ctx, "x"); !errors.Is(err, ErrDenied) || errors.Is(err, ErrUnavailable) {
+		t.Fatalf("got %v", err)
 	}
 }

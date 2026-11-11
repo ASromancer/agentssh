@@ -116,7 +116,8 @@ func (q *Queue) Sticky(host, cmd string) bool {
 func (q *Queue) Add(r Request) bool {
 	e := &entry{req: r, code: NewCode(), done: make(chan Decision, 1)}
 	body := codeBody(r, e.code)
-	if !q.codes() {
+	noCode := !q.codes()
+	if noCode {
 		body = fmt.Sprintf("%s: %s [%s] — open agentssh to approve", r.Host, r.Cmd, r.Level)
 	}
 	err := q.Notify("agentssh approval #"+fmt.Sprint(r.ID), body)
@@ -126,6 +127,9 @@ func (q *Queue) Add(r Request) bool {
 	q.mu.Lock()
 	q.pending[r.ID] = e
 	q.mu.Unlock()
+	if noCode && q.codes() { // the daemon switched to codes meanwhile
+		_ = q.SendCode(r.ID)
+	}
 	time.AfterFunc(q.Timeout, func() { _ = q.finish(r.ID, Decision{Outcome: "timeout"}) })
 	time.AfterFunc(q.Timeout+time.Minute, func() { // nobody waited for it
 		q.mu.Lock()

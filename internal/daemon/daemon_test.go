@@ -641,3 +641,16 @@ func TestOSAuthOff(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+func TestDialogTimeoutKeepsOSMode(t *testing.T) {
+	h := setup(t)
+	h.d.human = &humanok.Fake{ConfirmErr: fmt.Errorf("%w: timed out", humanok.ErrDenied)}
+	if err := h.d.confirm("x"); !errors.Is(err, humanok.ErrDenied) {
+		t.Fatalf("got %v", err)
+	}
+	var st StatusReply
+	h.call("Status", &Empty{}, &st)
+	if st.Auth != "os" {
+		t.Fatalf("status %+v", st)
+	}
+}
