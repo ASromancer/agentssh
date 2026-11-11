@@ -40,12 +40,13 @@ func cmdDaemon(args []string) int {
 	noUI := fs.Bool("no-ui", false, "do not serve the local web UI")
 	noTray := fs.Bool("no-tray", false, "do not show the tray icon")
 	uiPort := fs.Int("ui-port", 0, "UI port on 127.0.0.1 (0 = random)")
+	afterPid := fs.Int("after-pid", 0, "wait for this daemon to release the socket first (used by restarts)")
 	if _, err := parse(fs, args); err != nil {
 		return 2
 	}
 	*noTray = *noTray || os.Getenv("OSTIARY_NO_TRAY") == "1"
 	if *detach {
-		if err := startDetached(filepath.Join(paths.State(), "daemon.log"), detachArgs(*noUI, *noTray, *uiPort)); err != nil {
+		if err := startDetached(filepath.Join(paths.State(), "daemon.log"), detachArgs(*noUI, *noTray, *uiPort, *afterPid)); err != nil {
 			return errf(1, "%v", err)
 		}
 		return 0
@@ -58,6 +59,9 @@ func cmdDaemon(args []string) int {
 		}
 		log.SetOutput(f)
 	}
+	if *afterPid != 0 {
+		daemon.WaitForPredecessor()
+	}
 	if daemon.Running() { // cheap check first: no keyring unlock for a duplicate start
 		return errf(1, "daemon already running")
 	}
@@ -65,6 +69,10 @@ func cmdDaemon(args []string) int {
 	if err != nil {
 		return errf(1, "%v", err)
 	}
+	d.SetVersion(Version)
+	d.SetRespawn(func(old int) error {
+		return startDetached(filepath.Join(paths.State(), "daemon.log"), detachArgs(*noUI, *noTray, *uiPort, old))
+	})
 	d.SetSetup(daemon.SetupFuncs{
 		Agents: func() []daemon.AgentState {
 			home, _ := os.UserHomeDir()
@@ -119,12 +127,15 @@ func cmdDaemon(args []string) int {
 		log.Print(err)
 		return 1
 	}
-	return 0
+	return d.RestartCode()
 }
 
-// detachArgs are the flags a --detach child must inherit.
-func detachArgs(noUI, noTray bool, uiPort int) []string {
+// detachArgs are the flags a --detach child must inherit; afterPid != 0 makes it wait for that daemon.
+func detachArgs(noUI, noTray bool, uiPort, afterPid int) []string {
 	var a []string
+	if afterPid != 0 {
+		a = append(a, "--after-pid", strconv.Itoa(afterPid))
+	}
 	if noUI {
 		a = append(a, "--no-ui")
 	}

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 )
 
@@ -32,6 +33,7 @@ func startDetached(logPath string, extra []string) error {
 	if err != nil {
 		return err
 	}
+	exe = strings.TrimSuffix(exe, " (deleted)") // the binary was replaced by an update
 	c := exec.Command(exe, append([]string{"daemon", "--log", logPath}, extra...)...)
 	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := c.Start(); err != nil {

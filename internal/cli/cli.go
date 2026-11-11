@@ -33,6 +33,7 @@ For the human user (need a real terminal; approvals and admin commands are confi
 in an OS authentication dialog, or with a code from a desktop notification as a fallback):
   ostiary open                       open the Ostiary app (starts the daemon if needed)
   ostiary stop                       stop the daemon
+  ostiary upgrade [--check] [--yes]  install the latest release (--check: exit 10 if one exists)
   ostiary init [--passphrase] | unlock | lock | approve | reload | doctor | ui | daemon | install-polkit | install-service | uninstall-service
   ostiary host add|edit|ls|rm|trust ...
   ostiary key gen|import|export|ls|rm ...
@@ -69,12 +70,13 @@ func Main(args []string) int {
 		fmt.Print(usage)
 		return 2
 	}
+	cleanOldBinaries()
 	cmds := map[string]func([]string) int{
 		"hosts": cmdHosts, "run": cmdRun, "out": cmdOut, "get": cmdGet, "put": cmdPut,
 		"job": cmdJob, "explain": cmdExplain, "hook": cmdHook,
 		"init": cmdInit, "unlock": cmdUnlock, "lock": cmdLock, "approve": cmdApprove,
 		"reload": cmdReload, "host": cmdHost, "key": cmdKey, "log": cmdLog, "doctor": cmdDoctor, "ui": cmdUI,
-		"install-hooks": cmdInstallHooks, "daemon": cmdDaemon, "install-polkit": cmdInstallPolkit, "install-service": cmdInstallService, "uninstall-service": cmdUninstallService, "mcp": cmdMCP, "open": cmdOpen, "stop": cmdStop,
+		"install-hooks": cmdInstallHooks, "daemon": cmdDaemon, "install-polkit": cmdInstallPolkit, "install-service": cmdInstallService, "uninstall-service": cmdUninstallService, "mcp": cmdMCP, "open": cmdOpen, "stop": cmdStop, "upgrade": cmdUpgrade,
 		"version": func([]string) int { fmt.Println("ostiary", Version); return 0 },
 	}
 	if f, ok := cmds[args[0]]; ok {

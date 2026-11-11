@@ -52,6 +52,7 @@ Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; Value
 [Run]
 Filename: "{app}\ostiary.exe"; Parameters: "install-service --yes"; Flags: runhidden; Tasks: autostart
 Filename: "{app}\ostiary-app.exe"; Description: "Open Ostiary"; Flags: postinstall nowait skipifsilent
+Filename: "{app}\ostiary-app.exe"; Parameters: "daemon --detach"; Flags: runhidden nowait; Check: WizardSilent
 
 [UninstallRun]
 Filename: "{app}\ostiary.exe"; Parameters: "stop"; Flags: runhidden; RunOnceId: "stop"

@@ -32,6 +32,7 @@ import (
 	"github.com/ASromancer/ostiary/internal/paths"
 	"github.com/ASromancer/ostiary/internal/policy"
 	"github.com/ASromancer/ostiary/internal/sshconn"
+	"github.com/ASromancer/ostiary/internal/update"
 	"github.com/ASromancer/ostiary/internal/vault"
 )
 
@@ -61,6 +62,14 @@ type Daemon struct {
 	autoAt  time.Time
 	uiBase  string
 	uiLogin func() string
+
+	version     string
+	updBase     string // release API base; tests only, "" = update.Base()
+	update      *UpdateInfo
+	release     *update.Release
+	respawn     func(oldPid int) error
+	restartCode atomic.Int32
+	restarting  atomic.Bool // a successor takes over the socket: do not remove it
 }
 
 func New(notify func(approval.Notice) error, approvalTimeout time.Duration) (*Daemon, error) {
@@ -343,9 +352,12 @@ func (d *Daemon) Serve(ln net.Listener) error {
 			time.Sleep(time.Hour)
 		}
 	}()
+	go d.updateLoop()
 	log.Printf("ostiary daemon listening on %s", sock)
 	err := d.ServeListener(ln)
-	os.Remove(sock)
+	if !d.restarting.Load() {
+		os.Remove(sock)
+	}
 	d.lock()
 	if errors.Is(err, net.ErrClosed) {
 		return nil

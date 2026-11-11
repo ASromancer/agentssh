@@ -12,7 +12,7 @@ first part runs in code mode (OSTIARY_OS_AUTH=0), the last part in OS mode.
 
 usage: go build -tags e2efake -o /tmp/ostiary-e2e . && python3 scripts/e2e.py /tmp/ostiary-e2e
 """
-import fcntl, http.client, json, os, re, select, shutil, signal, socket, subprocess, sys, tempfile, termios, time, urllib.parse
+import fcntl, http.client, http.server, json, threading, os, re, select, shutil, signal, socket, subprocess, sys, tempfile, termios, time, urllib.parse
 
 BIN = os.path.abspath(sys.argv[1])  # built with -tags e2efake
 SSHD = shutil.which("sshd") or "/usr/sbin/sshd"
@@ -565,6 +565,24 @@ def main():
         rc, out, _ = run("doctor")
         check("approvals use OS authentication" in out, "a broken dialog does not switch to codes", out)
         ENV.pop("OSTIARY_E2E_HUMANOK")
+        # upgrade --check against a fake release server (never the real network)
+        class Rel(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = json.dumps({"tag_name": "v99.0.0", "html_url": "https://example.invalid/r", "body": "", "assets": []}).encode()
+                self.send_response(200 if self.path.endswith("/releases/latest") else 404)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+        rel = http.server.HTTPServer(("127.0.0.1", 0), Rel)
+        threading.Thread(target=rel.serve_forever, daemon=True).start()
+        ENV["OSTIARY_E2E_RELEASES_URL"] = f"http://127.0.0.1:{rel.server_port}"
+        rc, out, err = run("upgrade", "--check")
+        rel.shutdown()
+        ENV.pop("OSTIARY_E2E_RELEASES_URL")
+        check(rc == 10 and "99.0.0" in out, "upgrade --check reports a newer release (exit 10)", out + err)
         os.kill(daemon_pid, signal.SIGTERM)
         daemon_pid = None
         time.sleep(0.5)

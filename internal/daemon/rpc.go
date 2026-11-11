@@ -89,9 +89,10 @@ type JobReply struct {
 type StatusReply struct {
 	Locked, UserOnly, Passphrase, VaultMissing bool
 	Pending                                    int
-	Auth                                       string // "os" or "code"
-	AuthNote                                   string // why OS authentication is unavailable
-	UI                                         string // base URL of the web UI, "" when it is not running
+	Auth                                       string      // "os" or "code"
+	AuthNote                                   string      // why OS authentication is unavailable
+	UI                                         string      // base URL of the web UI, "" when it is not running
+	Update                                     *UpdateInfo // a newer release, nil when up to date or unchecked
 }
 
 type UILoginReply struct{ URL string }

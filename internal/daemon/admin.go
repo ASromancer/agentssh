@@ -26,7 +26,7 @@ func vaultSalt() ([]byte, error) { return vault.Salt(paths.Vault()) }
 var adminOps = map[string]bool{
 	"reload": true, "host-set": true, "host-rm": true, "trust": true,
 	"key-gen": true, "key-import": true, "key-rm": true, "key-export": true,
-	"init": true, "hooks": true, "autostart": true,
+	"init": true, "hooks": true, "autostart": true, "upgrade": true,
 }
 
 func (s *Service) Unlock(a *UnlockArgs, _ *Empty) error {
@@ -75,6 +75,13 @@ func (s *Service) Begin(a *BeginArgs, r *BeginReply) error {
 		}
 		if a.Name != "keyring" && a.Name != "passphrase" {
 			return fmt.Errorf("init mode must be keyring or passphrase, not %q", a.Name)
+		}
+	case "upgrade":
+		s.d.mu.Lock()
+		u := s.d.update
+		s.d.mu.Unlock()
+		if u == nil || a.Name != u.Version {
+			return fmt.Errorf("no update to version %q is available", a.Name)
 		}
 	case "autostart":
 		if a.Name != "on" && a.Name != "off" {
@@ -151,6 +158,8 @@ func (d *Daemon) adminMessage(a *AdminArgs, data any) string {
 	switch a.Op {
 	case "init":
 		return "create the Ostiary vault (" + a.Name + ")"
+	case "upgrade":
+		return d.upgradeMessage(a.Name)
 	case "hooks":
 		return "install the Ostiary hook for " + a.Name
 	case "autostart":
@@ -214,6 +223,8 @@ func (d *Daemon) admin(a *AdminArgs, data any, r *AdminReply) error {
 		}
 		r.Out = "installed the Ostiary hook for " + a.Name
 		return nil
+	case "upgrade":
+		return d.upgrade(a.Name, r)
 	case "autostart":
 		if d.setup.SetAutostart == nil {
 			return errors.New("autostart is not available in this daemon")

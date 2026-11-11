@@ -39,10 +39,10 @@ func TestDoctorChecksShape(t *testing.T) {
 }
 
 func TestDetachArgs(t *testing.T) {
-	if got := detachArgs(false, false, 0); len(got) != 0 {
+	if got := detachArgs(false, false, 0, 0); len(got) != 0 {
 		t.Fatalf("defaults: %v", got)
 	}
-	if got := strings.Join(detachArgs(true, true, 8080), " "); got != "--no-ui --no-tray --ui-port 8080" {
+	if got := strings.Join(detachArgs(true, true, 8080, 0), " "); got != "--no-ui --no-tray --ui-port 8080" {
 		t.Fatalf("got %q", got)
 	}
 }

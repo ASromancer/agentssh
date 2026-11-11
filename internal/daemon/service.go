@@ -480,7 +480,7 @@ func (s *Service) JobKill(a *JobArgs, r *JobReply) error {
 func (s *Service) Status(_ *Empty, r *StatusReply) error {
 	d := s.d
 	d.mu.Lock()
-	r.Locked, r.UserOnly = d.data == nil, d.userOnly
+	r.Locked, r.UserOnly, r.Update = d.data == nil, d.userOnly, d.update
 	d.mu.Unlock()
 	salt, err := vaultSalt()
 	r.VaultMissing = err != nil
