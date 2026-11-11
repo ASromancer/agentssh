@@ -19,8 +19,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/ASromancer/agentssh/internal/approval"
@@ -45,10 +47,12 @@ type Daemon struct {
 	userOnly bool // config on disk differs from the approved hash
 	jobs     map[int]*sshconn.Job
 
-	q     *approval.Queue
-	human humanok.Confirmer
-	pool  *sshconn.Pool
-	log   *audit.Log
+	q      *approval.Queue
+	human  humanok.Confirmer
+	dialog sync.Mutex            // one OS dialog at a time
+	broken atomic.Pointer[error] // OS authentication failed: codes from now on
+	pool   *sshconn.Pool
+	log    *audit.Log
 }
 
 func New(notify func(title, body string) error, approvalTimeout time.Duration) (*Daemon, error) {
@@ -64,7 +68,10 @@ func New(notify func(title, body string) error, approvalTimeout time.Duration) (
 		log:  &audit.Log{Path: paths.Audit()},
 	}
 	d.human = humanok.Default
-	d.q.UseCodes = func() bool { return d.human.Available() != nil }
+	if why := osAuthOff(runtime.GOOS, os.Getenv("AGENTSSH_OS_AUTH")); why != "" {
+		d.human = authOff(why)
+	}
+	d.q.UseCodes = func() bool { return !d.osAuth() }
 	if err := d.loadConfig(); err != nil {
 		return nil, err
 	}
@@ -72,8 +79,36 @@ func New(notify func(title, body string) error, approvalTimeout time.Duration) (
 	return d, nil
 }
 
+// osAuthOff returns why OS authentication is off, or "" when it is on.
+// It is on by default only on Linux, the only backend verified on a real
+// machine so far; AGENTSSH_OS_AUTH=1 turns it on, =0 off, everywhere.
+func osAuthOff(goos, env string) string {
+	switch {
+	case env == "0":
+		return "OS authentication is off (AGENTSSH_OS_AUTH=0)"
+	case env == "1", goos == "linux":
+		return ""
+	}
+	return "OS authentication is off on " + goos + " until verified; set AGENTSSH_OS_AUTH=1 to enable"
+}
+
+// authOff is the confirmer when OS authentication is turned off.
+type authOff string
+
+func (a authOff) Available() error                      { return fmt.Errorf("%w: %s", humanok.ErrUnavailable, string(a)) }
+func (a authOff) Confirm(context.Context, string) error { return a.Available() }
+
+// authProblem returns why approvals use codes, or nil when they use OS
+// authentication.
+func (d *Daemon) authProblem() error {
+	if p := d.broken.Load(); p != nil {
+		return *p
+	}
+	return d.human.Available()
+}
+
 // osAuth reports whether the human is authenticated through the OS.
-func (d *Daemon) osAuth() bool { return d.human.Available() == nil }
+func (d *Daemon) osAuth() bool { return d.authProblem() == nil }
 
 const (
 	confirmTimeout = 2 * time.Minute
@@ -90,8 +125,7 @@ func dialogText(msg string) string {
 	msg = strings.ToValidUTF8(msg, "\uFFFD")
 	msg = strings.Map(func(r rune) rune {
 		switch {
-		case r == 0, r >= 0x200B && r <= 0x200F, r >= 0x202A && r <= 0x202E,
-			r >= 0x2066 && r <= 0x2069, r == 0xFEFF:
+		case r == 0, unicode.Is(unicode.Cf, r), r == 0x3164, r == 0x2800: // invisible
 			return -1
 		case r < 0x20, r >= 0x7F && r <= 0x9F:
 			return ' '
@@ -115,10 +149,31 @@ func dialogText(msg string) string {
 	return msg
 }
 
+var errBusy = errors.New("another confirmation is already in progress; finish it first")
+
+// confirm shows one OS dialog at a time, so that the human never answers
+// a dialog started by someone else while waiting for their own. If the OS
+// cannot show it, the daemon falls back to codes for the rest of its life
+// and sends a code for every pending request.
 func (d *Daemon) confirm(msg string) error {
+	if !d.dialog.TryLock() {
+		return errBusy
+	}
+	defer d.dialog.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), confirmTimeout)
 	defer cancel()
-	return d.human.Confirm(ctx, dialogText(msg))
+	err := d.human.Confirm(ctx, dialogText(msg))
+	if !errors.Is(err, humanok.ErrUnavailable) {
+		return err
+	}
+	err = fmt.Errorf("OS authentication failed (%w); switched to codes", err)
+	if d.broken.CompareAndSwap(nil, &err) {
+		log.Print(err)
+		for _, r := range d.q.Pending() {
+			_ = d.q.SendCode(r.ID)
+		}
+	}
+	return err
 }
 
 func (d *Daemon) loadConfig() error {

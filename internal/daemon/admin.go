@@ -13,6 +13,7 @@ import (
 
 	"github.com/ASromancer/agentssh/internal/audit"
 	"github.com/ASromancer/agentssh/internal/hosts"
+	"github.com/ASromancer/agentssh/internal/humanok"
 	"github.com/ASromancer/agentssh/internal/paths"
 	"github.com/ASromancer/agentssh/internal/sshconn"
 	"github.com/ASromancer/agentssh/internal/vault"
@@ -88,7 +89,10 @@ func (s *Service) Admin(a *AdminArgs, r *AdminReply) error {
 	if d.osAuth() {
 		e.Auth = "os"
 		if data, err = d.q.Take(a.Ticket, op); err == nil {
-			err = d.confirm(adminMessage(a, data))
+			err = d.confirm(d.adminMessage(a, data))
+		}
+		if errors.Is(err, humanok.ErrUnavailable) {
+			err = fmt.Errorf("%w; start the operation again and enter the code", err)
 		}
 	} else {
 		data, err = d.q.Check(a.Ticket, op, a.Code)
@@ -110,17 +114,24 @@ func (s *Service) Admin(a *AdminArgs, r *AdminReply) error {
 	return nil
 }
 
-// adminMessage is the OS dialog text for an admin operation.
-func adminMessage(a *AdminArgs, data any) string {
+// adminMessage is the OS dialog text for an admin operation. It shows
+// every field that takes effect.
+func (d *Daemon) adminMessage(a *AdminArgs, data any) string {
 	switch a.Op {
 	case "trust":
 		if k, ok := data.(ssh.PublicKey); ok {
 			return fmt.Sprintf("trust host key %s for %s", ssh.FingerprintSHA256(k), a.Name)
 		}
 	case "host-set":
-		if a.Host != nil {
-			return fmt.Sprintf("save host %s (%s@%s, profile %s, agent access %v)",
-				a.Name, a.Host.User, a.Host.Addr(), a.Host.EffectiveProfile(), a.Host.Agent)
+		if h := a.Host; h != nil {
+			key := h.Key
+			d.mu.Lock()
+			if d.data != nil && d.data.Passwords[key] != nil {
+				key += " (password)"
+			}
+			d.mu.Unlock()
+			return fmt.Sprintf("save host %s (%s@%s, profile %s, agent access %v, key=%s, allow=%q, deny=%q)",
+				a.Name, h.User, h.Addr(), h.EffectiveProfile(), h.Agent, key, h.Allow, h.Deny)
 		}
 	}
 	return strings.TrimSpace("agentssh " + a.Op + " " + a.Name)

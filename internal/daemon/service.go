@@ -17,6 +17,7 @@ import (
 	"github.com/ASromancer/agentssh/internal/approval"
 	"github.com/ASromancer/agentssh/internal/audit"
 	"github.com/ASromancer/agentssh/internal/hosts"
+	"github.com/ASromancer/agentssh/internal/humanok"
 	"github.com/ASromancer/agentssh/internal/paths"
 	"github.com/ASromancer/agentssh/internal/policy"
 	"github.com/ASromancer/agentssh/internal/sshconn"
@@ -487,7 +488,7 @@ func (s *Service) Status(_ *Empty, r *StatusReply) error {
 	r.Passphrase = salt != nil
 	r.Pending = len(d.q.Pending())
 	r.Auth = "code"
-	if err := d.human.Available(); err == nil {
+	if err := d.authProblem(); err == nil {
 		r.Auth = "os"
 	} else {
 		r.AuthNote = err.Error()
@@ -522,14 +523,17 @@ func (s *Service) Decide(a *DecideArgs, _ *Empty) error {
 		return fmt.Errorf("no pending request #%d", a.ID)
 	}
 	lvl := strings.ToUpper(fmt.Sprint(req.Level))
-	msg := fmt.Sprintf("[%s] approve on %s: %s", lvl, req.Host, req.Cmd)
+	msg := fmt.Sprintf("[%s] approve #%d on %s: %s", lvl, a.ID, req.Host, req.Cmd)
 	switch a.Choice {
 	case "s":
 		msg += " \u2014 and the same command for 30 minutes"
 	case "m":
-		msg = fmt.Sprintf("[%s] deny on %s with a message to the agent: %s", lvl, req.Host, req.Cmd)
+		msg = fmt.Sprintf("[%s] deny #%d on %s with a message to the agent: %s \u2014 message: %q", lvl, a.ID, req.Host, req.Cmd, a.Note)
 	}
 	if err := d.confirm(msg); err != nil {
+		if errors.Is(err, humanok.ErrUnavailable) {
+			return fmt.Errorf("%w; a code for #%d was sent as a desktop notification: choose again and enter it", err, a.ID)
+		}
 		return err
 	}
 	_, err := d.q.Resolve(a.ID, a.Choice, a.Note, "os")
