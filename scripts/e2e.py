@@ -32,6 +32,7 @@ NOTES = os.path.join(TMP, "notifications.log")
 ENV["OSTIARY_E2E_NOTES"] = NOTES
 
 ENV["OSTIARY_NO_TRAY"] = "1"
+ENV["OSTIARY_NO_UPDATE_CHECK"] = "1"  # the daemon must never reach api.github.com from CI
 
 
 class UI:

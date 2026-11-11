@@ -147,8 +147,9 @@ type SetupReply struct {
 	Keys          int // keys + passwords; -1 while locked
 	Agents        []AgentState
 	Autostart     bool
-	PolkitMissing bool // linux only: the polkit policy file is absent
-	Skipped       bool // the user hid the guide
+	PolkitMissing bool   // linux only: the polkit policy file is absent
+	Skipped       bool   // the user hid the guide
+	CLIHint       string // macOS .app only: command that puts ostiary on PATH for agents
 }
 
 type SetupSkipArgs struct{ Skip bool }

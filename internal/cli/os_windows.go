@@ -58,6 +58,9 @@ func installService(startNow bool) error {
 	if err != nil {
 		return err
 	}
+	if app := filepath.Join(filepath.Dir(exe), "ostiary-app.exe"); fileExists0(app) {
+		exe = app // GUI binary: no console window at every sign-in
+	}
 	tr := fmt.Sprintf(`"%s" daemon --detach`, exe)
 	if out, err := exec.Command("schtasks", "/Create", "/F", "/SC", "ONLOGON", "/RL", "LIMITED",
 		"/TN", "ostiary", "/TR", tr).CombinedOutput(); err != nil {
@@ -92,4 +95,9 @@ func startService() error {
 
 func serviceInstalled() bool {
 	return exec.Command("schtasks", "/Query", "/TN", "ostiary").Run() == nil
+}
+
+func fileExists0(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }

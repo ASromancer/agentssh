@@ -3,9 +3,12 @@ package daemon
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -114,7 +117,16 @@ func (s *Service) Setup(_ *Empty, r *SetupReply) error {
 		r.PolkitMissing = err != nil
 	}
 	r.Skipped = readSetupState().Skipped
+	r.CLIHint = cliHint(runtime.GOOS, selfExe(), func() bool { _, err := exec.LookPath("ostiary"); return err == nil })
 	return nil
+}
+
+// cliHint: a macOS .app install has no ostiary on PATH, so agents (skill, MCP, hooks) cannot run it.
+func cliHint(goos, exe string, onPath func() bool) string {
+	if goos != "darwin" || !strings.Contains(exe, ".app/Contents/MacOS/") || onPath() {
+		return ""
+	}
+	return fmt.Sprintf("sudo ln -sf %q /usr/local/bin/ostiary", exe)
 }
 
 func (s *Service) SetupSkip(a *SetupSkipArgs, _ *Empty) error {

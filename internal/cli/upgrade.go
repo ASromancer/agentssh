@@ -61,11 +61,15 @@ func cmdUpgrade(args []string) int {
 		return errf(1, "%v", err)
 	}
 	exe = strings.TrimSuffix(exe, " (deleted)")
-	msg, err := update.Apply(ctx, r, Version, update.DetectKind(exe, runtime.GOOS), exe, runtime.GOOS, runtime.GOARCH, nil)
+	kind := update.DetectKind(exe, runtime.GOOS)
+	msg, err := update.Apply(ctx, r, Version, kind, exe, runtime.GOOS, runtime.GOARCH, nil)
 	if err != nil {
 		return errf(1, "%v", err)
 	}
 	fmt.Println(msg)
+	if kind == update.WindowsInstaller { // Setup stops the daemon and starts the new one itself
+		return 0
+	}
 	if daemon.Running() {
 		if c, _ := dial(); c != nil {
 			defer c.Close()

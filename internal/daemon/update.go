@@ -163,7 +163,8 @@ func (d *Daemon) upgrade(version string, r *AdminReply) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	exe := selfExe()
-	msg, err := update.Apply(ctx, rel, d.version, update.DetectKind(exe, runtime.GOOS), exe, runtime.GOOS, runtime.GOARCH, nil)
+	kind := update.DetectKind(exe, runtime.GOOS)
+	msg, err := update.Apply(ctx, rel, d.version, kind, exe, runtime.GOOS, runtime.GOARCH, nil)
 	if err != nil {
 		return err
 	}
@@ -171,6 +172,9 @@ func (d *Daemon) upgrade(version string, r *AdminReply) error {
 	d.mu.Lock()
 	d.update, d.release = nil, nil // installed: a second approval must not re-apply it
 	d.mu.Unlock()
+	if kind == update.WindowsInstaller {
+		return nil // Setup stops this daemon (ostiary stop) and starts the new one itself
+	}
 	if err := d.restart(time.Second); err != nil {
 		r.Out += "; " + err.Error()
 	}

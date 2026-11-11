@@ -1,6 +1,6 @@
 {
   "name": "ostiary",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Run commands on servers over SSH without exposing keys: deterministic command policy, out-of-band approval for destructive commands, audit. Requires the ostiary binary on PATH.",
   "author": { "name": "ASromancer" },
   "homepage": "https://github.com/ASromancer/ostiary",

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/ASromancer/ostiary/internal/daemon"
+	"github.com/ASromancer/ostiary/internal/hook"
 	"github.com/ASromancer/ostiary/plugin"
 )
 
@@ -17,7 +18,7 @@ import (
 // docs as of 2026-11; see README "Agents".
 
 var sshTools = []string{"ssh", "scp", "sftp", "mosh", "slogin"}
-var humanOnlySubs = []string{"approve", "key", "reload", "host", "init", "install-hooks", "unlock", "daemon", "install-service", "uninstall-service", "ui", "open", "stop", "upgrade"}
+var humanOnlySubs = hook.HumanOnly
 
 type agentInstaller struct {
 	name    string
@@ -243,7 +244,7 @@ const codexBlock = codexBegin + `
 Never call ssh, scp, sftp, rsync (to remote hosts) or mosh directly. Use ostiary (see the ostiary skill):
 ` + "`ostiary hosts`, `ostiary run <host> \"<cmd>\"`, `ostiary out <id> --grep <re>`" + `.
 Exit 100 = blocked by policy, 101 = denied by the user or timed out, 102 = daemon down or vault locked.
-On 101 stop and ask the user; never retry another way. Never run ostiary approve/key/reload/host/init/unlock.
+On 101 stop and ask the user; never retry another way. Never run (also as ostiary-app) approve, key, reload, host, init, unlock, install-hooks, daemon, ui, open, stop, upgrade, install-service, uninstall-service.
 ` + codexEnd + "\n"
 
 func codexRules() string {
@@ -252,8 +253,10 @@ func codexRules() string {
 	for _, t := range sshTools {
 		fmt.Fprintf(&b, "prefix_rule(pattern=[%q], decision=\"forbidden\", justification=\"Use ostiary run <host> <cmd> instead of %s\")\n", t, t)
 	}
-	for _, s := range humanOnlySubs {
-		fmt.Fprintf(&b, "prefix_rule(pattern=[\"ostiary\", %q], decision=\"forbidden\", justification=\"ostiary %s is for the human user only\")\n", s, s)
+	for _, bin := range hook.Binaries {
+		for _, s := range humanOnlySubs {
+			fmt.Fprintf(&b, "prefix_rule(pattern=[%q, %q], decision=\"forbidden\", justification=\"%s %s is for the human user only\")\n", bin, s, bin, s)
+		}
 	}
 	return b.String()
 }
@@ -302,8 +305,10 @@ func geminiPolicy() string {
 	for _, t := range sshTools {
 		fmt.Fprintf(&b, "\n[[rule]]\ntoolName = \"run_shell_command\"\ncommandPrefix = %q\ndecision = \"deny\"\npriority = 900\ndenyMessage = \"Use ostiary run <host> <cmd> instead of %s\"\n", t, t)
 	}
-	for _, s := range humanOnlySubs {
-		fmt.Fprintf(&b, "\n[[rule]]\ntoolName = \"run_shell_command\"\ncommandPrefix = \"ostiary %s\"\ndecision = \"deny\"\npriority = 900\ndenyMessage = \"ostiary %s is for the human user only\"\n", s, s)
+	for _, bin := range hook.Binaries {
+		for _, s := range humanOnlySubs {
+			fmt.Fprintf(&b, "\n[[rule]]\ntoolName = \"run_shell_command\"\ncommandPrefix = \"%s %s\"\ndecision = \"deny\"\npriority = 900\ndenyMessage = \"%s %s is for the human user only\"\n", bin, s, bin, s)
+		}
 	}
 	return b.String()
 }
@@ -348,8 +353,10 @@ func installAntigravity(home, hookCmd string) error {
 	for _, t := range sshTools {
 		deny = append(deny, "command("+t+")")
 	}
-	for _, s := range humanOnlySubs {
-		deny = append(deny, "command(ostiary "+s+")")
+	for _, bin := range hook.Binaries {
+		for _, s := range humanOnlySubs {
+			deny = append(deny, "command("+bin+" "+s+")")
+		}
 	}
 	perm := filepath.Join(home, ".gemini", "antigravity-cli", "settings.json")
 	if err := editJSON(perm, func(m map[string]any) bool { return addStrings(child(m, "permissions"), "deny", deny...) }); err != nil {

@@ -91,7 +91,7 @@ func installService(startNow bool) error {
   <key>Label</key><string>dev.ostiary</string>
   <key>ProgramArguments</key><array><string>%s</string><string>daemon</string></array>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
 </dict></plist>
 `, exe)
 		if err := writeFile(p, plist); err != nil {

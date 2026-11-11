@@ -17,7 +17,7 @@ Get the file for your system from [Releases](https://github.com/ASromancer/ostia
 
 **Windows**: run `Ostiary-Setup-<ver>-x64.exe` (per-user, no admin). SmartScreen: "More info" then "Run anyway". Open Start Menu, Ostiary.
 
-**macOS**: open `Ostiary-<ver>.dmg` and drag Ostiary to Applications. First launch: right-click the app, then Open (unsigned). Optional command-line symlink: `sudo ln -sf /Applications/Ostiary.app/Contents/MacOS/ostiary /usr/local/bin/ostiary`.
+**macOS**: open `Ostiary-<ver>.dmg` and drag Ostiary to Applications. First launch (unsigned): on macOS 14 and earlier, right-click the app, then Open. On macOS 15 and later, open the app once, then System Settings, Privacy & Security, "Open Anyway" (or run `xattr -dr com.apple.quarantine /Applications/Ostiary.app`). **Required for agents:** `sudo mkdir -p /usr/local/bin && sudo ln -sf /Applications/Ostiary.app/Contents/MacOS/ostiary /usr/local/bin/ostiary`. The app does not put `ostiary` on your `PATH`, and the agent skill, the MCP configs and the Claude plugin hook all run a bare `ostiary`; without the symlink they fail (the hook silently, so the soft safety layer disappears). The Bắt đầu screen shows this command until `ostiary` is found on `PATH`.
 
 **Debian/Ubuntu**: `sudo apt install ./ostiary_<ver>_amd64.deb` (or `arm64`), then open "Ostiary" from the application menu. Optional OS authentication dialog: `sudo "$(command -v ostiary)" install-polkit`.
 
@@ -33,8 +33,6 @@ ostiary init        # vault + master key in the OS keyring (or --passphrase), im
 
 The static build (`CGO_ENABLED=0`) ignores `LD_PRELOAD`, which a dynamic binary would load into the daemon.
 
-**Upgrading** from v0.1.x: run `ostiary install-service` once (Linux; it rewrites the user unit to start with your desktop session), then `sudo "$(command -v ostiary)" install-polkit` if you want OS authentication (`sudo` does not search `~/.local/bin`).
-
 `init` imports hosts from `~/.ssh/config`, but agents can't see any of them until you enable each one.
 
 ```sh
@@ -48,7 +46,7 @@ Use one key per agent, not your personal key. Admin commands (`host`, `key`, `re
 
 ## Upgrading
 
-Ostiary checks GitHub for a newer release in the background and shows an "Update" banner in the web UI. Click it to upgrade, or run `ostiary upgrade` in a terminal; the upgrade is confirmed like any other admin action. The daemon then restarts itself.
+Ostiary checks GitHub for a newer release in the background and shows an "Update" banner in the web UI. Click it to upgrade, or run `ostiary upgrade` in a terminal; from the web UI the upgrade is confirmed like any other admin action; `ostiary upgrade` asks y/N in the terminal. Only a newer release signed with Ostiary's key can be installed either way. The daemon then restarts itself.
 
 Before anything is installed, the signature over `SHA256SUMS` is verified against the public key built into Ostiary, and then the downloaded asset's SHA-256 is checked against that file. A mismatch aborts the upgrade and leaves the current version running.
 
@@ -56,7 +54,7 @@ Before anything is installed, the signature over `SHA256SUMS` is verified agains
 
 Set `OSTIARY_NO_UPDATE_CHECK=1` in the daemon's environment to turn off the background check.
 
-A vault in passphrase mode needs unlocking again after the restart.
+A vault in passphrase mode needs unlocking again after the restart. The web UI session is lost on restart: reopen Ostiary from its icon or with `ostiary open`. On macOS, run `ostiary install-service` once after updating from 0.2.0 so launchd keeps `ostiary stop` stopped. After an in-place macOS upgrade Finder's Get Info may still show the old version (cosmetic).
 
 ## Moving from agentssh
 
@@ -66,6 +64,10 @@ Ostiary is the new name of agentssh and starts from a clean slate; it does not r
 2. Stop and disable the old service: `systemctl --user disable --now agentssh` (Linux), `launchctl unload -w ~/Library/LaunchAgents/dev.agentssh.plist` (macOS), `schtasks /Delete /TN agentssh /F` (Windows).
 3. Install Ostiary, run `ostiary init` (or open the app), then add your hosts and keys again.
 4. When everything works, delete `~/.config/agentssh` and `~/.local/state/agentssh` (on Windows `%APPDATA%\agentssh` and `%LOCALAPPDATA%\agentssh`).
+
+## Uninstalling
+
+Removing Ostiary (the Windows uninstaller, deleting the macOS app, `apt remove`) does not edit your agents' settings. Delete the `ostiary hook …` entries from `~/.claude/settings.json`, `~/.codex/hooks.json`, `~/.gemini/settings.json` and Antigravity's `hooks.json` (and the plugin, if installed), or every tool call reports a hook error.
 
 ## What the agent uses
 

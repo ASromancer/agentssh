@@ -86,14 +86,16 @@ let sessionDead = false;
 function sessionLost() {
   if (sessionDead) return;
   sessionDead = true;
+  const upgraded = !!upgradeWait; // after an update the new daemon has a new port and session
+  if (upgraded) { upgradeWait.close(); upgradeWait = null; }
   try { es.close(); } catch (e) { /* event stream not created yet */ }
   const o = el("div", "sessionlost");
   o.setAttribute("role", "alertdialog");
   o.setAttribute("aria-modal", "true");
   o.setAttribute("aria-label", "Phiên đăng nhập đã hết hạn");
   const box = el("div", "card");
-  box.append(icon("alert", 32), el("h2", null, "Phiên đăng nhập đã hết hạn"),
-    el("p", null, "Mở lại Ostiary từ biểu tượng app hoặc chạy `ostiary open`."));
+  box.append(icon("alert", 32), el("h2", null, upgraded ? "Ostiary đã cập nhật" : "Phiên đăng nhập đã hết hạn"),
+    el("p", null, (upgraded ? "Ostiary đã cập nhật và khởi động lại. " : "") + "Mở lại Ostiary từ biểu tượng app hoặc chạy `ostiary open`."));
   o.appendChild(box);
   document.body.appendChild(o);
 }
@@ -1439,7 +1441,8 @@ let sseErrors = 0;
 let esOpened = false;
 es.onopen = () => { conn(true); if (upgradeWait) { upgradeWait.close(); upgradeWait = null; } if (esOpened) refresh(); esOpened = true; }; // resync what a drop missed
 es.addEventListener("update", () => { sseErrors = 0; conn(true); refresh(); });
-es.onerror = () => { conn(false); call("GET", "/api/status").catch(() => {}); /* a 401 here means the session is gone, not the daemon */ if (++sseErrors === 3 && !sessionDead) toast("Mất kết nối tới daemon ostiary", "error"); };
+let upgradeTimer = 0;
+es.onerror = () => { conn(false); if (upgradeWait && !upgradeTimer) upgradeTimer = setTimeout(() => { if (upgradeWait) sessionLost(); }, 4000); /* the new daemon has another port: this tab cannot reconnect */ call("GET", "/api/status").catch(() => {}); /* a 401 here means the session is gone, not the daemon */ if (++sseErrors === 3 && !sessionDead) toast("Mất kết nối tới daemon ostiary", "error"); };
 // ---- setup ("Bắt đầu") ----
 const AGENT_NAMES = { claude: "Claude Code", codex: "Codex", gemini: "Gemini CLI", antigravity: "Antigravity" };
 let setupGated = false;
@@ -1473,13 +1476,14 @@ async function setupAct(b, fn) { // run an action button, then re-render
   refresh();
 }
 function stepCard(n, o) {
-  const c = el("li", "step" + (o.done ? " done" : "") + (o.current ? " current" : "") + (o.optional ? " optional" : ""));
+  const c = el("li", "step" + (o.done ? " done" : "") + (o.current ? " current" : "") + (o.optional ? " optional" : "") + (o.warn ? " warn" : ""));
   const ic = el("span", "stepic");
-  if (o.done) ic.appendChild(icon("check")); else ic.textContent = o.optional ? "+" : String(n);
+  if (o.done) ic.appendChild(icon("check")); else if (o.warn) ic.textContent = "!"; else ic.textContent = o.optional ? "+" : String(n);
   const body = el("div", "stepbody");
   const head = el("div", "stephead");
   head.appendChild(el("h2", null, o.title));
   if (o.done) head.appendChild(el("span", "pill ok", "Xong"));
+  else if (o.warn) head.appendChild(el("span", "pill warn", "Cần cho agent"));
   else if (o.optional) head.appendChild(el("span", "pill", "Tùy chọn"));
   body.append(head, el("p", "muted", o.desc));
   if (o.hint) body.appendChild(el("p", "hint", o.hint));
@@ -1618,6 +1622,13 @@ async function loadSetup() {
     const ex = el("div");
     ex.append(cb2, el("p", "muted", "rồi khởi động lại Ostiary."));
     out.push(stepCard(6, { title: "Duyệt bằng mật khẩu máy", desc: "Để duyệt bằng hộp thoại mật khẩu của hệ điều hành thay vì mã, chạy một lần trong terminal:", optional: true, extra: ex }));
+  }
+  if (r.CLIHint) { // informational: agents cannot find `ostiary` without it
+    const cb3 = el("div", "cmdbox");
+    cb3.append(el("pre", "cmd", r.CLIHint), copyBtn(r.CLIHint, "Sao chép lệnh"));
+    const ex = el("div");
+    ex.append(cb3, el("p", "muted", "Nếu /usr/local/bin chưa có, chạy `sudo mkdir -p /usr/local/bin` trước."));
+    out.push(stepCard(7, { title: "Lệnh ostiary cho agent", desc: "App macOS không đặt lệnh ostiary vào PATH, nên agent (skill, MCP, hook) sẽ báo không tìm thấy lệnh. Chạy một lần trong terminal:", warn: true, extra: ex }));
   }
   const first = out.findIndex((_, i) => i < 5 && !done[i]);
   if (first >= 0) out[first].classList.add("current");

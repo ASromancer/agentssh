@@ -9,7 +9,7 @@
       "name": "ostiary",
       "source": "./plugin",
       "description": "SSH for Claude Code without exposing keys: policy, approvals, audit. Install the ostiary binary first.",
-      "version": "0.1.0"
+      "version": "0.2.0"
     }
   ]
 }

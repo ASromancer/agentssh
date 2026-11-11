@@ -422,3 +422,4 @@ td.nowrap { white-space: nowrap; color: var(--text2); }
 }
 
 a { color: var(--accent); text-underline-offset: 2px; }
+.step.warn { border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); } .step.warn .stepic { border-color: var(--warn); color: var(--warn); }

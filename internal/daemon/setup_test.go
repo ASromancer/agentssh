@@ -176,3 +176,19 @@ func TestInitKeyringFailureRemovesVault(t *testing.T) {
 		t.Fatal("vault left behind after keyring failure")
 	}
 }
+
+func TestCLIHint(t *testing.T) {
+	app := "/Applications/Ostiary.app/Contents/MacOS/ostiary"
+	no, yes := func() bool { return false }, func() bool { return true }
+	if got := cliHint("darwin", app, no); got != `sudo ln -sf "`+app+`" /usr/local/bin/ostiary` {
+		t.Errorf("got %q", got)
+	}
+	for _, c := range []struct {
+		goos, exe string
+		on        func() bool
+	}{{"darwin", app, yes}, {"darwin", "/usr/local/bin/ostiary", no}, {"linux", app, no}} {
+		if got := cliHint(c.goos, c.exe, c.on); got != "" {
+			t.Errorf("%v: got %q", c, got)
+		}
+	}
+}

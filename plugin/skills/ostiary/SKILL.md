@@ -31,7 +31,8 @@ You never hold SSH keys. A local daemon runs commands for you, classifies each o
 ## Rules
 
 - Never call `ssh`, `scp`, `sftp`, `rsync` to remote hosts, or `mosh` directly.
-- Never run `ostiary approve`, `key`, `reload`, `host`, `init`, `unlock` or `install-hooks`:
+- Never run `ostiary approve`, `key`, `reload`, `host`, `init`, `unlock`, `install-hooks`, `daemon`,
+  `ui`, `open`, `stop`, `upgrade`, `install-service` or `uninstall-service` (also as `ostiary-app`):
   those are for the human only.
 - On `101`: stop and ask the user. Do not retry the same goal another way.
 - On `100`: tell the user what you wanted to do and why; do not look for a workaround.

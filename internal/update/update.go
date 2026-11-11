@@ -515,5 +515,5 @@ func runInstaller(data []byte, name string) (string, error) {
 	}
 	// The temp dir is left in place: the installer needs the file while it runs.
 	go cmd.Wait()
-	return "installer is running; Ostiary will restart when it finishes", nil
+	return "installer is running; Ostiary will restart by itself when it finishes", nil
 }
