@@ -1,7 +1,7 @@
-// Run: node internal/ui/static/highlight_test.mjs  (not part of go test)
+// Run: node internal/ui/testdata/highlight_test.mjs  (not part of go test)
 import { readFileSync } from "node:fs";
 import assert from "node:assert";
-const src = readFileSync(new URL("./app.js", import.meta.url), "utf8");
+const src = readFileSync(new URL("../static/app.js", import.meta.url), "utf8");
 const byteToJs = new Function(src.match(/function byteToJs[\s\S]*?\n}\n/)[0] + "; return byteToJs;")();
 // "é" 2 bytes, "€" 3 bytes, "😀" 4 bytes (2 UTF-16 units), then "rm"
 const cmd = "é€😀rm";

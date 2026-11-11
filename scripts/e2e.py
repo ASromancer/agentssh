@@ -517,6 +517,7 @@ def main():
                 rid = pend[0]["id"]
                 break
             time.sleep(0.2)
+        check(rid is not None, "UI deny path: the request appeared in pending")
         st, _, body = ui.req("POST", "/api/decide", {"id": rid, "choice": "y"})
         check(st == 400 and os.path.exists(victimd), "UI approve is refused when the OS dialog denies", body)
         st, _, body = ui.req("POST", "/api/decide", {"id": rid, "choice": "n"})

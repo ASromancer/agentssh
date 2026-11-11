@@ -265,7 +265,7 @@ $("keygen").addEventListener("click", (e) => busy(e.target, async () => {
   $("pubkey").textContent = pub; $("pubkey").classList.remove("hidden"); $("pubcopy").classList.remove("hidden");
   flash("Đã tạo key. Thêm public key vào authorized_keys trên server."); loadVault();
 }));
-$("pubcopy").addEventListener("click", () => navigator.clipboard.writeText($("pubkey").textContent).then(() => flash("Đã copy")));
+$("pubcopy").addEventListener("click", () => navigator.clipboard.writeText($("pubkey").textContent).then(() => flash("Đã copy")).catch(() => flash("Không copy được", true)));
 $("keyimport").addEventListener("click", (e) => busy(e.target, async () => {
   const name = $("keyname").value.trim(); const file = $("keyfile").files[0];
   if (!name || !file) throw new Error("Nhập tên key và chọn file");
@@ -320,9 +320,14 @@ $("outclose").addEventListener("click", () => $("outbox").classList.add("hidden"
 // ---- live updates ----
 async function refresh() {
   try { await loadStatus(); await loadPending(); } catch (e) { flash(e.message, true); }
+  const tab = document.querySelector(".tab.active");
+  if (tab && tab.dataset.tab === "hosts") loadHosts().catch((e) => flash(e.message, true));
+  if (tab && tab.dataset.tab === "vault") loadVault().catch((e) => flash(e.message, true));
 }
 const es = new EventSource("/events");
-es.addEventListener("update", refresh);
-es.onerror = () => flash("Mất kết nối tới daemon agentssh", true);
+let sseErrors = 0;
+es.addEventListener("update", () => { sseErrors = 0; refresh(); });
+es.onerror = () => { if (++sseErrors >= 3) flash("Mất kết nối tới daemon agentssh", true); };
+window.addEventListener("hashchange", () => loadPending().catch((e) => flash(e.message, true)));
 refresh();
 if (location.hash.startsWith("#req=")) showTab("approvals");

@@ -23,6 +23,9 @@ jobs:
         if: runner.os != 'Windows'
       - run: go test ./...
         if: runner.os == 'Windows'
+      - name: UI highlight offsets
+        if: runner.os == 'Linux'
+        run: node internal/ui/testdata/highlight_test.mjs
       - name: e2e against a real OpenSSH server
         if: runner.os != 'Windows'
         run: |
