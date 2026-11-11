@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os/user"
+	"runtime"
 	"strings"
 	"unsafe"
 
@@ -50,8 +51,6 @@ func (platform) Available() error {
 	return nil
 }
 
-func ptr[T any](p *T) uintptr { return uintptr(unsafe.Pointer(p)) }
-
 // Confirm asks for the current user's Windows password and checks it with
 // LogonUserW; the resulting token must belong to the user running agentssh.
 // ponytail: ctx is not honoured while the modal prompt is open.
@@ -60,38 +59,71 @@ func (platform) Confirm(_ context.Context, msg string) error {
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
-	caption, _ := windows.UTF16PtrFromString("agentssh")
-	text, _ := windows.UTF16PtrFromString(msg)
+	caption, err := windows.UTF16PtrFromString("agentssh")
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	text, err := windows.UTF16PtrFromString(strings.ReplaceAll(msg, "\x00", ""))
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
 	info := creduiInfo{cbSize: uint32(unsafe.Sizeof(creduiInfo{})), pszMessageText: text, pszCaptionText: caption}
 
 	// Pre-fill the current account so the prompt asks only for its password.
-	name, _ := windows.UTF16PtrFromString(u.Username)
-	empty, _ := windows.UTF16PtrFromString("")
+	name, err := windows.UTF16PtrFromString(u.Username)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	empty, err := windows.UTF16PtrFromString("")
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
 	var inSize uint32
-	procPack.Call(0, ptr(name), ptr(empty), 0, ptr(&inSize))
+	procPack.Call(0, uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(empty)), 0, uintptr(unsafe.Pointer(&inSize)))
+	if inSize == 0 {
+		return fmt.Errorf("%w: pack size query failed", ErrUnavailable)
+	}
 	in := make([]byte, inSize)
-	if r, _, e := procPack.Call(0, ptr(name), ptr(empty), ptr(&in[0]), ptr(&inSize)); r == 0 {
+	r, _, e := procPack.Call(0, uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(empty)),
+		uintptr(unsafe.Pointer(&in[0])), uintptr(unsafe.Pointer(&inSize)))
+	runtime.KeepAlive(name)
+	runtime.KeepAlive(empty)
+	runtime.KeepAlive(in)
+	if r == 0 {
 		return fmt.Errorf("%w: pack: %v", ErrUnavailable, e)
 	}
 
 	var authPkg, outSize uint32
-	var out uintptr
+	var out *byte
 	var save int32
-	r, _, _ := procPrompt.Call(ptr(&info), 0, ptr(&authPkg), ptr(&in[0]), uintptr(inSize),
-		ptr(&out), ptr(&outSize), ptr(&save), creduiwinGeneric|creduiwinInCredOnly)
+	r, _, _ = procPrompt.Call(uintptr(unsafe.Pointer(&info)), 0, uintptr(unsafe.Pointer(&authPkg)),
+		uintptr(unsafe.Pointer(&in[0])), uintptr(inSize),
+		uintptr(unsafe.Pointer(&out)), uintptr(unsafe.Pointer(&outSize)), uintptr(unsafe.Pointer(&save)),
+		creduiwinGeneric|creduiwinInCredOnly)
+	runtime.KeepAlive(&info)
+	runtime.KeepAlive(text)
+	runtime.KeepAlive(caption)
+	runtime.KeepAlive(in)
 	if r == errorCancelled {
 		return ErrDenied
 	}
 	if r != 0 {
 		return fmt.Errorf("%w: credential prompt error %d", ErrUnavailable, r)
 	}
-	defer procFree.Call(out)
+	if out == nil {
+		return fmt.Errorf("%w: credential prompt returned no buffer", ErrUnavailable)
+	}
+	// Deferred calls run last-in first-out: zero the typed credential, then free it.
+	defer procFree.Call(uintptr(unsafe.Pointer(out)))
+	defer clear(unsafe.Slice(out, outSize))
 
 	var userBuf, domBuf, passBuf [512]uint16
 	un, dn, pn := uint32(len(userBuf)), uint32(len(domBuf)), uint32(len(passBuf))
 	defer clear(passBuf[:])
-	if r, _, e := procUnpack.Call(0, out, uintptr(outSize), ptr(&userBuf[0]), ptr(&un),
-		ptr(&domBuf[0]), ptr(&dn), ptr(&passBuf[0]), ptr(&pn)); r == 0 {
+	if r, _, e := procUnpack.Call(0, uintptr(unsafe.Pointer(out)), uintptr(outSize),
+		uintptr(unsafe.Pointer(&userBuf[0])), uintptr(unsafe.Pointer(&un)),
+		uintptr(unsafe.Pointer(&domBuf[0])), uintptr(unsafe.Pointer(&dn)),
+		uintptr(unsafe.Pointer(&passBuf[0])), uintptr(unsafe.Pointer(&pn))); r == 0 {
 		return fmt.Errorf("%w: unpack: %v", ErrUnavailable, e)
 	}
 	account := windows.UTF16ToString(userBuf[:])
@@ -99,10 +131,21 @@ func (platform) Confirm(_ context.Context, msg string) error {
 	if d, n, ok := strings.Cut(account, `\`); ok && domain == "" {
 		domain, account = d, n
 	}
-	acc16, _ := windows.UTF16PtrFromString(account)
-	dom16, _ := windows.UTF16PtrFromString(domain)
+	acc16, err := windows.UTF16PtrFromString(account)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	dom16, err := windows.UTF16PtrFromString(domain)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
 	var tok windows.Token
-	if r, _, _ := procLogon.Call(ptr(acc16), ptr(dom16), ptr(&passBuf[0]), logonInteractive, logonProviderDefault, ptr(&tok)); r == 0 {
+	r, _, _ = procLogon.Call(uintptr(unsafe.Pointer(acc16)), uintptr(unsafe.Pointer(dom16)),
+		uintptr(unsafe.Pointer(&passBuf[0])), logonInteractive, logonProviderDefault,
+		uintptr(unsafe.Pointer(&tok)))
+	runtime.KeepAlive(acc16)
+	runtime.KeepAlive(dom16)
+	if r == 0 {
 		return ErrDenied
 	}
 	defer tok.Close()
