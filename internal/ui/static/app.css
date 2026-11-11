@@ -287,7 +287,7 @@ td.nowrap { white-space: nowrap; color: var(--text2); }
 
 /* ---------- narrow ---------- */
 @media (max-width: 860px) {
-  .app { grid-template-columns: 1fr; }
+  .app { grid-template-columns: 1fr; align-content: start; } /* short pages must not stretch the top bar */
   .sidebar { position: sticky; z-index: 6; height: auto; flex-direction: row; align-items: center; gap: 8px; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--border); overflow-x: auto; }
   .brand { padding: 0 8px 0 0; }
   .nav { flex-direction: row; } .nav button { width: auto; white-space: nowrap; padding: 7px 10px; }
