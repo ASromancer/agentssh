@@ -34,7 +34,6 @@ func Supported() bool {
 func Run(o Options, done <-chan struct{}) {
 	var once sync.Once
 	quit := func() { once.Do(systray.Quit) }
-	go func() { <-done; quit() }()
 	systray.Run(func() {
 		systray.SetIcon(Icon(runtime.GOOS))
 		systray.SetTooltip(Title(0))
@@ -72,6 +71,8 @@ func Run(o Options, done <-chan struct{}) {
 				}
 			}
 		}()
+		// Started last: Quit before the Windows window exists is lost.
+		go func() { <-done; quit() }()
 	}, func() {})
 	<-done
 }
