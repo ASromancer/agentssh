@@ -13,7 +13,6 @@ import (
 
 	"github.com/ASromancer/agentssh/internal/audit"
 	"github.com/ASromancer/agentssh/internal/hosts"
-	"github.com/ASromancer/agentssh/internal/humanok"
 	"github.com/ASromancer/agentssh/internal/paths"
 	"github.com/ASromancer/agentssh/internal/sshconn"
 	"github.com/ASromancer/agentssh/internal/vault"
@@ -91,9 +90,6 @@ func (s *Service) Admin(a *AdminArgs, r *AdminReply) error {
 		if data, err = d.q.Take(a.Ticket, op); err == nil {
 			err = d.confirm(d.adminMessage(a, data))
 		}
-		if errors.Is(err, humanok.ErrUnavailable) {
-			err = fmt.Errorf("%w; start the operation again and enter the code", err)
-		}
 	} else {
 		data, err = d.q.Check(a.Ticket, op, a.Code)
 	}
@@ -142,6 +138,7 @@ func (d *Daemon) admin(a *AdminArgs, data any, r *AdminReply) error {
 		if err := d.loadConfig(); err != nil {
 			return err
 		}
+		d.pickAuth()
 	}
 	if a.Op == "trust" {
 		cfg, _, _, _ := d.snapshot()
@@ -167,7 +164,10 @@ func (d *Daemon) admin(a *AdminArgs, data any, r *AdminReply) error {
 	case "reload":
 		d.data.ConfigHash = ConfigHash()
 		d.userOnly = false
-		r.Out = fmt.Sprintf("reloaded %d hosts", len(d.cfg.Hosts))
+		r.Out = fmt.Sprintf("reloaded %d hosts; approvals use OS authentication", len(d.cfg.Hosts))
+		if err := d.authProblem(); err != nil {
+			r.Out = fmt.Sprintf("reloaded %d hosts; approvals use codes (%v)", len(d.cfg.Hosts), err)
+		}
 	case "host-set", "host-rm":
 		if d.userOnly || ConfigHash() != d.data.ConfigHash {
 			return errors.New("hosts.toml or rules.toml changed on disk; review the change and run 'agentssh reload' first")

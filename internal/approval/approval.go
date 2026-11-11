@@ -115,21 +115,18 @@ func (q *Queue) Sticky(host, cmd string) bool {
 // It returns whether the notification was delivered.
 func (q *Queue) Add(r Request) bool {
 	e := &entry{req: r, code: NewCode(), done: make(chan Decision, 1)}
-	body := codeBody(r, e.code)
-	noCode := !q.codes()
-	if noCode {
+	codes := q.codes()
+	body := fmt.Sprintf("%s: %s [%s] code: %s", r.Host, r.Cmd, r.Level, e.code)
+	if !codes {
 		body = fmt.Sprintf("%s: %s [%s] — open agentssh to approve", r.Host, r.Cmd, r.Level)
 	}
 	err := q.Notify("agentssh approval #"+fmt.Sprint(r.ID), body)
-	if err != nil && q.codes() {
+	if err != nil && codes {
 		e.req.Code = e.code
 	}
 	q.mu.Lock()
 	q.pending[r.ID] = e
 	q.mu.Unlock()
-	if noCode && q.codes() { // the daemon switched to codes meanwhile
-		_ = q.SendCode(r.ID)
-	}
 	time.AfterFunc(q.Timeout, func() { _ = q.finish(r.ID, Decision{Outcome: "timeout"}) })
 	time.AfterFunc(q.Timeout+time.Minute, func() { // nobody waited for it
 		q.mu.Lock()
@@ -137,30 +134,6 @@ func (q *Queue) Add(r Request) bool {
 		q.mu.Unlock()
 	})
 	return err == nil
-}
-
-func codeBody(r Request, code string) string {
-	return fmt.Sprintf("%s: %s [%s] code: %s", r.Host, r.Cmd, r.Level, code)
-}
-
-// SendCode notifies the code of a pending request that was added while
-// approvals used OS authentication, after the daemon fell back to codes.
-// If the notification fails, the code is exposed in Request.Code.
-func (q *Queue) SendCode(id int) error {
-	q.mu.Lock()
-	e, ok := q.pending[id]
-	if !ok || e.decided {
-		q.mu.Unlock()
-		return fmt.Errorf("no pending request #%d", id)
-	}
-	r, code := e.req, e.code
-	q.mu.Unlock()
-	if err := q.Notify("agentssh approval #"+fmt.Sprint(id), codeBody(r, code)); err != nil {
-		q.mu.Lock()
-		e.req.Code = code
-		q.mu.Unlock()
-	}
-	return nil
 }
 
 // finish records d as the decision for id. It returns false, and changes

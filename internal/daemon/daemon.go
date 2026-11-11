@@ -50,7 +50,7 @@ type Daemon struct {
 	q      *approval.Queue
 	human  humanok.Confirmer
 	dialog sync.Mutex            // one OS dialog at a time
-	broken atomic.Pointer[error] // OS authentication failed: codes from now on
+	auth   atomic.Pointer[error] // why approvals use codes; nil error: OS authentication
 	pool   *sshconn.Pool
 	log    *audit.Log
 }
@@ -71,6 +71,7 @@ func New(notify func(title, body string) error, approvalTimeout time.Duration) (
 	if why := osAuthOff(runtime.GOOS, os.Getenv("AGENTSSH_OS_AUTH")); why != "" {
 		d.human = authOff(why)
 	}
+	d.pickAuth()
 	d.q.UseCodes = func() bool { return !d.osAuth() }
 	if err := d.loadConfig(); err != nil {
 		return nil, err
@@ -98,14 +99,18 @@ type authOff string
 func (a authOff) Available() error                      { return fmt.Errorf("%w: %s", humanok.ErrUnavailable, string(a)) }
 func (a authOff) Confirm(context.Context, string) error { return a.Available() }
 
+// pickAuth decides how the human is authenticated. It runs at start and
+// on an approved reload only: nothing an agent does to the session later
+// (renaming the display socket, killing the polkit agent) can switch the
+// daemon to codes.
+func (d *Daemon) pickAuth() {
+	err := d.human.Available()
+	d.auth.Store(&err)
+}
+
 // authProblem returns why approvals use codes, or nil when they use OS
 // authentication.
-func (d *Daemon) authProblem() error {
-	if p := d.broken.Load(); p != nil {
-		return *p
-	}
-	return d.human.Available()
-}
+func (d *Daemon) authProblem() error { return *d.auth.Load() }
 
 // osAuth reports whether the human is authenticated through the OS.
 func (d *Daemon) osAuth() bool { return d.authProblem() == nil }
@@ -153,8 +158,8 @@ var errBusy = errors.New("another confirmation is already in progress; finish it
 
 // confirm shows one OS dialog at a time, so that the human never answers
 // a dialog started by someone else while waiting for their own. If the OS
-// cannot show it, the daemon falls back to codes for the rest of its life
-// and sends a code for every pending request.
+// cannot show it, the daemon stays in OS mode: switching to codes is the
+// human's decision, made by restarting the daemon.
 func (d *Daemon) confirm(msg string) error {
 	if !d.dialog.TryLock() {
 		return errBusy
@@ -166,14 +171,7 @@ func (d *Daemon) confirm(msg string) error {
 	if !errors.Is(err, humanok.ErrUnavailable) {
 		return err
 	}
-	err = fmt.Errorf("OS authentication failed (%w); switched to codes", err)
-	if d.broken.CompareAndSwap(nil, &err) {
-		log.Print(err)
-		for _, r := range d.q.Pending() {
-			_ = d.q.SendCode(r.ID)
-		}
-	}
-	return err
+	return fmt.Errorf("OS authentication failed: %w. Run 'agentssh doctor'; to use approval codes instead, restart the daemon with AGENTSSH_OS_AUTH=0.", err)
 }
 
 func (d *Daemon) loadConfig() error {

@@ -458,7 +458,7 @@ def main():
             t = Tty("key", "gen", "osauth")
             t.expect(r"ssh-ed25519 ")
             check(t.wait() == 0 and "key-gen osauth" in open(gate + ".log").read(), "admin op via OS authentication")
-            # The OS dialog breaks: the daemon switches to codes for good.
+            # The OS dialog breaks: the daemon stays in OS mode; the human can still deny.
             open(gate, "w").write("unavailable")
             victim5 = os.path.join(remote, "victim5")
             open(victim5, "w").write("x")
@@ -468,18 +468,16 @@ def main():
             t.expect(r"DESTRUCTIVE")
             t.expect(r"\[y\] once")
             t.send("y")
-            t.expect("switched to codes")
+            t.expect("AGENTSSH_OS_AUTH=0")
             t.expect(r"\[y\] once")
-            t.send("y")
-            t.expect(r"approval code \(from the desktop notification\): ")
-            t.send(last_code())
-            t.expect("approved once")
+            t.send("n")
+            t.expect("denied")
             out, err = agent.communicate(timeout=30)
-            check(agent.returncode == 0 and not os.path.exists(victim5),
-                  "OS dialog breaks: approve falls back to a code", out + err)
+            check(agent.returncode == 101 and os.path.exists(victim5),
+                  "OS dialog breaks: error names AGENTSSH_OS_AUTH=0, deny still works", out + err)
             t.p.kill()
             rc, out, _ = run("doctor")
-            check("approvals use codes" in out and "switched to codes" in out, "doctor reports the fallback", out)
+            check("approvals use OS authentication" in out, "a broken dialog does not switch to codes", out)
             ENV.pop("AGENTSSH_E2E_HUMANOK")
         os.kill(daemon_pid, signal.SIGTERM)
         daemon_pid = None

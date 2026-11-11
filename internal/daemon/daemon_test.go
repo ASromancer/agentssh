@@ -134,6 +134,13 @@ func (h *harness) notify(_, body string) error {
 	return nil
 }
 
+// useHuman swaps the confirmer and decides the mode again, as a daemon
+// start would.
+func (h *harness) useHuman(c humanok.Confirmer) {
+	h.d.human = c
+	h.d.pickAuth()
+}
+
 func (h *harness) lastCode() string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -213,7 +220,7 @@ key = "k1"
 		t.Fatal(err)
 	}
 	h.d = d
-	d.human = &humanok.Fake{Err: humanok.ErrUnavailable} // stay in code mode even where polkit exists
+	h.useHuman(&humanok.Fake{Err: humanok.ErrUnavailable}) // stay in code mode even where polkit exists
 	ln, err := net.Listen("unix", paths.Socket())
 	if err != nil {
 		t.Fatal(err)
@@ -390,7 +397,7 @@ func TestDaemonEndToEnd(t *testing.T) {
 func TestOSAuth(t *testing.T) {
 	h := setup(t)
 	fake := &humanok.Fake{Allow: false}
-	h.d.human = fake
+	h.useHuman(fake)
 	if err := h.call("Unlock", &UnlockArgs{Pass: "pw"}, &Empty{}); err != nil {
 		t.Fatal(err)
 	}
@@ -560,66 +567,88 @@ func TestConfirmOneAtATime(t *testing.T) {
 func TestOSAuthBreaksDecide(t *testing.T) {
 	h := setup(t)
 	fake := &humanok.Fake{ConfirmErr: fmt.Errorf("%w: no polkit authentication agent", humanok.ErrUnavailable)}
-	h.d.human = fake
+	h.useHuman(fake)
 	h.call("Unlock", &UnlockArgs{Pass: "pw"}, &Empty{})
 	victim := h.remote + "/broken"
 	os.WriteFile(victim, []byte("x"), 0o600)
-	rm := ExecArgs{Cmd: "rm " + victim}
-	r := h.exec(rm)
-	h.mu.Lock()
-	note := h.notes[len(h.notes)-1]
-	h.mu.Unlock()
-	if r.Pending == 0 || strings.Contains(note, "code:") {
-		t.Fatalf("expected an OS-mode request without a code: %+v %q", r, note)
+	r := h.exec(ExecArgs{Cmd: "rm " + victim})
+	if r.Pending == 0 {
+		t.Fatalf("expected pending: %+v", r)
 	}
 	err := h.call("Decide", &DecideArgs{ID: r.Pending, Choice: "y"}, &Empty{})
-	if err == nil || !strings.Contains(err.Error(), "switched to codes") {
+	if err == nil || !strings.Contains(err.Error(), "no polkit authentication agent") ||
+		!strings.Contains(err.Error(), "agentssh doctor") || !strings.Contains(err.Error(), "AGENTSSH_OS_AUTH=0") {
 		t.Fatalf("decide: %v", err)
-	}
-	h.mu.Lock()
-	note = h.notes[len(h.notes)-1]
-	h.mu.Unlock()
-	if !strings.HasPrefix(note, "web1: rm "+victim+" [destructive] code: ") {
-		t.Fatalf("no code sent after the fallback: %q", note)
 	}
 	var st StatusReply
 	h.call("Status", &Empty{}, &st)
-	if st.Auth != "code" || !strings.Contains(st.AuthNote, "no polkit authentication agent") {
-		t.Fatalf("status %+v", st)
+	if st.Auth != "os" {
+		t.Fatalf("mode changed after a broken dialog: %+v", st)
 	}
-	fake.ConfirmErr = nil // the OS would work again, but the daemon stays on codes
-	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Choice: "y", Code: h.lastCode()}, &Empty{}); err != nil {
-		t.Fatal(err)
+	if p := h.d.q.Pending(); len(p) != 1 || p[0].Code != "" {
+		t.Fatalf("request not pending, or a code appeared: %+v", p)
 	}
-	rm.ApprovalID = r.Pending
-	if r := h.exec(rm); r.Code != 0 || r.Exit != 0 {
-		t.Fatalf("run after code approval: %+v", r)
+	h.mu.Lock()
+	for _, n := range h.notes {
+		if strings.Contains(n, "code:") {
+			t.Fatalf("a code was sent: %q", n)
+		}
 	}
-	if n := len(fake.Msgs()); n != 1 {
-		t.Fatalf("%d dialogs after the fallback", n-1)
+	h.mu.Unlock()
+	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Choice: "n"}, &Empty{}); err != nil {
+		t.Fatalf("deny after a broken dialog: %v", err)
 	}
 }
 
 func TestOSAuthBreaksAdmin(t *testing.T) {
 	h := setup(t)
-	h.d.human = &humanok.Fake{ConfirmErr: humanok.ErrUnavailable}
+	h.useHuman(&humanok.Fake{ConfirmErr: humanok.ErrUnavailable})
 	h.call("Unlock", &UnlockArgs{Pass: "pw"}, &Empty{})
 	var br BeginReply
 	var ar AdminReply
 	h.call("Begin", &BeginArgs{Op: "key-gen", Name: "k9"}, &br)
-	if !br.OSAuth {
-		t.Fatal("expected OS mode")
+	if !br.OSAuth || br.Code != "" {
+		t.Fatalf("expected OS mode: %+v", br)
 	}
 	err := h.call("Admin", &AdminArgs{Ticket: br.Ticket, Op: "key-gen", Name: "k9"}, &ar)
-	if err == nil || !strings.Contains(err.Error(), "switched to codes") || !strings.Contains(err.Error(), "start the operation again") {
+	if err == nil || !strings.Contains(err.Error(), "AGENTSSH_OS_AUTH=0") {
 		t.Fatalf("admin: %v", err)
 	}
 	h.call("Begin", &BeginArgs{Op: "key-gen", Name: "k9"}, &br)
-	if br.OSAuth {
-		t.Fatal("still in OS mode after the fallback")
+	if !br.OSAuth || br.Code != "" {
+		t.Fatalf("left OS mode after a broken dialog: %+v", br)
 	}
-	if err := h.call("Admin", &AdminArgs{Ticket: br.Ticket, Op: "key-gen", Name: "k9", Code: h.lastCode()}, &ar); err != nil {
+}
+
+// The mode is decided at start and on an approved reload only: whatever
+// an agent does to the session afterwards cannot switch it.
+func TestAuthModeDecidedOnce(t *testing.T) {
+	h := setup(t)
+	fake := &humanok.Fake{Allow: true}
+	h.useHuman(fake)
+	fake.Err = humanok.ErrUnavailable // e.g. the display socket was renamed
+	var st StatusReply
+	if h.call("Status", &Empty{}, &st); st.Auth != "os" || !h.d.osAuth() {
+		t.Fatalf("OS mode lost after start: %+v", st)
+	}
+
+	h.useHuman(&humanok.Fake{Err: fmt.Errorf("%w: polkit action not installed", humanok.ErrUnavailable)})
+	if h.call("Status", &Empty{}, &st); st.Auth != "code" || !strings.Contains(st.AuthNote, "polkit action not installed") {
+		t.Fatalf("status %+v", st)
+	}
+	h.d.human.(*humanok.Fake).Err = nil // the human fixed polkit
+	if h.d.osAuth() {
+		t.Fatal("mode changed without a reload")
+	}
+	h.call("Unlock", &UnlockArgs{Pass: "pw"}, &Empty{})
+	var br BeginReply
+	var ar AdminReply
+	h.call("Begin", &BeginArgs{Op: "reload"}, &br)
+	if err := h.call("Admin", &AdminArgs{Ticket: br.Ticket, Op: "reload", Code: h.lastCode()}, &ar); err != nil {
 		t.Fatal(err)
+	}
+	if h.call("Status", &Empty{}, &st); st.Auth != "os" || !strings.Contains(ar.Out, "OS authentication") {
+		t.Fatalf("approved reload did not pick OS mode: %+v %q", st, ar.Out)
 	}
 }
 
@@ -644,7 +673,7 @@ func TestOSAuthOff(t *testing.T) {
 
 func TestDialogTimeoutKeepsOSMode(t *testing.T) {
 	h := setup(t)
-	h.d.human = &humanok.Fake{ConfirmErr: fmt.Errorf("%w: timed out", humanok.ErrDenied)}
+	h.useHuman(&humanok.Fake{ConfirmErr: fmt.Errorf("%w: timed out", humanok.ErrDenied)})
 	if err := h.d.confirm("x"); !errors.Is(err, humanok.ErrDenied) {
 		t.Fatalf("got %v", err)
 	}
