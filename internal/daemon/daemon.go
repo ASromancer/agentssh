@@ -55,6 +55,9 @@ type Daemon struct {
 	log    *audit.Log
 
 	setup   SetupFuncs
+	autoMu  sync.Mutex
+	autoVal bool
+	autoAt  time.Time
 	uiBase  string
 	uiLogin func() string
 }

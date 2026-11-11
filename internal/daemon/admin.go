@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
@@ -143,7 +144,7 @@ func (d *Daemon) adminMessage(a *AdminArgs, data any) string {
 	case "init":
 		return "create the Ostiary vault (" + a.Name + ")"
 	case "hooks":
-		return "install the Ostiary hook and skill for " + a.Name
+		return "install the Ostiary hook for " + a.Name
 	case "autostart":
 		if a.Name == "on" {
 			return "start Ostiary automatically at login"
@@ -179,19 +180,22 @@ func (d *Daemon) admin(a *AdminArgs, data any, r *AdminReply) error {
 			}
 			salt = vault.NewSalt()
 			key = vault.DeriveKey(a.Pass, salt)
-		} else if err := vault.KeyringSet(key); err != nil {
+			if err := InitVault(key, salt); err != nil {
+				return err
+			}
+		} else if err := InitVaultKeyring(key); errors.Is(err, ErrInitialized) {
+			return err
+		} else if err != nil {
 			return fmt.Errorf("OS keyring unavailable (%v); choose a passphrase instead", err)
 		}
-		if err := InitVault(key, salt); err != nil {
-			return err
-		}
-		if err := d.loadConfig(); err != nil {
-			return err
-		}
-		if err := d.unlock(key, salt); err != nil {
-			return err
-		}
 		r.Out = "vault created: " + paths.Vault()
+		err := d.loadConfig()
+		if err == nil {
+			err = d.unlock(key, salt)
+		}
+		if err != nil { // the vault exists; the UI will show it locked
+			r.Out += "; unlock it to continue (" + err.Error() + ")"
+		}
 		return nil
 	case "hooks":
 		if d.setup.InstallHook == nil {
@@ -209,6 +213,9 @@ func (d *Daemon) admin(a *AdminArgs, data any, r *AdminReply) error {
 		if err := d.setup.SetAutostart(a.Name == "on"); err != nil {
 			return err
 		}
+		d.autoMu.Lock()
+		d.autoAt = time.Time{}
+		d.autoMu.Unlock()
 		r.Out = map[string]string{"on": "Ostiary will start at login", "off": "Ostiary will no longer start at login"}[a.Name]
 		return nil
 	}

@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
+	"time"
 
 	"github.com/ASromancer/ostiary/internal/hosts"
 	"github.com/ASromancer/ostiary/internal/humanok"
@@ -22,8 +24,36 @@ func (d *Daemon) SetSetup(f SetupFuncs) { d.setup = f }
 // ~/.ssh/config hosts, hidden from agents) when there is none, and an
 // empty vault sealed with key (and salt in passphrase mode).
 func InitVault(key *[32]byte, salt []byte) error {
+	initMu.Lock()
+	defer initMu.Unlock()
+	return initLocked(key, salt)
+}
+
+// ErrInitialized means a vault already exists; nothing was changed.
+var ErrInitialized = errors.New("already initialized")
+
+var initMu sync.Mutex // serializes vault creation (and the keyring write that follows)
+
+// InitVaultKeyring is InitVault for keyring mode: the vault is created
+// first (exclusively), and only then is key stored in the keyring, so an
+// existing vault's keyring entry is never replaced. If the keyring write
+// fails, the new vault is removed again.
+func InitVaultKeyring(key *[32]byte) error {
+	initMu.Lock()
+	defer initMu.Unlock()
+	if err := initLocked(key, nil); err != nil {
+		return err
+	}
+	if err := vault.KeyringSet(key); err != nil {
+		os.Remove(paths.Vault())
+		return err
+	}
+	return nil
+}
+
+func initLocked(key *[32]byte, salt []byte) error {
 	if _, err := os.Stat(paths.Vault()); err == nil {
-		return errors.New("already initialized")
+		return ErrInitialized
 	}
 	for _, dir := range []string{paths.Config(), paths.State(), paths.Out()} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -40,7 +70,11 @@ func InitVault(key *[32]byte, salt []byte) error {
 			return err
 		}
 	}
-	return vault.Save(paths.Vault(), key, salt, &vault.Data{ConfigHash: ConfigHash()})
+	err := vault.Create(paths.Vault(), key, salt, &vault.Data{ConfigHash: ConfigHash()})
+	if errors.Is(err, os.ErrExist) {
+		return ErrInitialized
+	}
+	return err
 }
 
 type setupState struct {
@@ -74,9 +108,7 @@ func (s *Service) Setup(_ *Empty, r *SetupReply) error {
 	if d.setup.Agents != nil {
 		r.Agents = d.setup.Agents()
 	}
-	if d.setup.Autostart != nil {
-		r.Autostart = d.setup.Autostart()
-	}
+	r.Autostart = d.autostart()
 	if runtime.GOOS == "linux" {
 		_, err := os.Stat(humanok.PolicyPath)
 		r.PolkitMissing = err != nil
@@ -91,4 +123,18 @@ func (s *Service) SetupSkip(a *SetupSkipArgs, _ *Empty) error {
 	}
 	b, _ := json.Marshal(setupState{Skipped: a.Skip})
 	return os.WriteFile(paths.SetupState(), b, 0o600)
+}
+
+// autostart caches setup.Autostart (it runs systemctl) for 30s; the
+// autostart op drops the cache.
+func (d *Daemon) autostart() bool {
+	if d.setup.Autostart == nil {
+		return false
+	}
+	d.autoMu.Lock()
+	defer d.autoMu.Unlock()
+	if time.Since(d.autoAt) > 30*time.Second {
+		d.autoVal, d.autoAt = d.setup.Autostart(), time.Now()
+	}
+	return d.autoVal
 }

@@ -54,6 +54,16 @@ func DeriveKey(pass, salt []byte) *[32]byte {
 
 // Save encrypts d and atomically writes it to path with mode 0600.
 func Save(path string, key *[32]byte, salt []byte, d *Data) error {
+	return write(path, key, salt, d, false)
+}
+
+// Create is Save that fails with os.ErrExist instead of replacing a vault.
+// The file appears complete or not at all (hard link of a finished temp file).
+func Create(path string, key *[32]byte, salt []byte, d *Data) error {
+	return write(path, key, salt, d, true)
+}
+
+func write(path string, key *[32]byte, salt []byte, d *Data, excl bool) error {
 	plain, err := json.Marshal(d)
 	if err != nil {
 		return err
@@ -71,6 +81,22 @@ func Save(path string, key *[32]byte, salt []byte, d *Data) error {
 		return err
 	}
 	tmp := path + ".tmp"
+	if excl {
+		f, err := os.CreateTemp(filepath.Dir(path), ".vault-new-*")
+		if err != nil {
+			return err
+		}
+		tmp = f.Name()
+		defer os.Remove(tmp)
+		_, werr := f.Write(out)
+		if cerr := f.Close(); werr == nil {
+			werr = cerr
+		}
+		if werr != nil {
+			return werr
+		}
+		return os.Link(tmp, path)
+	}
 	if err := os.WriteFile(tmp, out, 0o600); err != nil {
 		return err
 	}

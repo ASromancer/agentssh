@@ -74,6 +74,9 @@ func installService(startNow bool) error {
 
 // removeService deletes the logon task; the running daemon is left alone.
 func removeService() error {
+	if !serviceInstalled() { // a missing task is success
+		return nil
+	}
 	if out, err := exec.Command("schtasks", "/Delete", "/F", "/TN", "ostiary").CombinedOutput(); err != nil {
 		return fmt.Errorf("schtasks: %v: %s", err, out)
 	}

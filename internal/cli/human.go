@@ -778,7 +778,11 @@ func oldUnit(path string) bool {
 // cmdUninstallService removes the login autostart and leaves the running
 // daemon alone. --yes skips the TTY (the Windows uninstaller has no console).
 func cmdUninstallService(args []string) int {
-	if len(args) != 1 || args[0] != "--yes" {
+	yes := len(args) == 1 && args[0] == "--yes"
+	if yes && runtime.GOOS != "windows" {
+		return errf(2, "--yes is only for the Windows uninstaller")
+	}
+	if !yes {
 		if t, code := openTTY("uninstall-service"); t == nil {
 			return code
 		}
@@ -818,8 +822,12 @@ func cmdInit(args []string) int {
 	}
 	key, salt := vault.NewKey(), []byte(nil)
 	keyringErr := errors.New("--passphrase given")
+	_, hostsErr := os.Stat(paths.Hosts())
 	if !*usePass {
-		keyringErr = vault.KeyringSet(key)
+		// Creates the vault first, then stores the key: never replaces an existing vault's key.
+		if keyringErr = daemon.InitVaultKeyring(key); errors.Is(keyringErr, daemon.ErrInitialized) {
+			return errf(1, "already initialized (%s exists)", paths.Vault())
+		}
 	}
 	if err := keyringErr; err != nil {
 		t.printf("not using the OS keyring (%v); the vault will use a passphrase.\n", err)
@@ -836,13 +844,11 @@ func cmdInit(args []string) int {
 			}
 			t.printf("passphrases differ\n")
 		}
+		if err := daemon.InitVault(key, salt); err != nil {
+			return errf(1, "%v", err)
+		}
 	} else {
 		t.printf("master key stored in the OS keyring\n")
-	}
-
-	_, hostsErr := os.Stat(paths.Hosts())
-	if err := daemon.InitVault(key, salt); err != nil {
-		return errf(1, "%v", err)
 	}
 	if errors.Is(hostsErr, os.ErrNotExist) {
 		if cfg, err := hosts.Load(paths.Hosts()); err == nil && len(cfg.Hosts) > 0 {

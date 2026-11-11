@@ -1,6 +1,9 @@
 package daemon
 
 import (
+	"errors"
+	"github.com/ASromancer/ostiary/internal/vault"
+	"github.com/zalando/go-keyring"
 	"net"
 	"os"
 	"path/filepath"
@@ -112,5 +115,64 @@ func TestSetupHooksAutostartSkip(t *testing.T) {
 	h.call("SetupSkip", &SetupSkipArgs{Skip: true}, &Empty{})
 	if err := h.call("Setup", &Empty{}, &sr); err != nil || !sr.Skipped || !sr.Autostart || !sr.Agents[0].Installed {
 		t.Fatalf("setup: %v %+v", err, sr)
+	}
+}
+
+func TestInitVaultConcurrent(t *testing.T) {
+	setupEmpty(t)
+	keys := [2]*[32]byte{vault.NewKey(), vault.NewKey()}
+	errs := make(chan error, 2)
+	for i := range keys {
+		go func() { errs <- InitVault(keys[i], nil) }()
+	}
+	e1, e2 := <-errs, <-errs
+	if (e1 == nil) == (e2 == nil) {
+		t.Fatalf("want exactly one winner: %v %v", e1, e2)
+	}
+	opens := 0
+	for _, k := range keys {
+		if _, err := vault.Open(paths.Vault(), k); err == nil {
+			opens++
+		}
+	}
+	if opens != 1 {
+		t.Fatalf("vault opens with %d keys", opens)
+	}
+}
+
+func TestInitKeyring(t *testing.T) {
+	keyring.MockInit()
+	h := setupEmpty(t)
+	var br BeginReply
+	var ar AdminReply
+	h.call("Begin", &BeginArgs{Op: "init", Name: "keyring"}, &br)
+	if err := h.call("Admin", &AdminArgs{Ticket: br.Ticket, Code: h.lastCode(), Op: "init", Name: "keyring"}, &ar); err != nil {
+		t.Fatal(err)
+	}
+	k1, err := vault.KeyringGet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vault.Open(paths.Vault(), k1); err != nil {
+		t.Fatalf("vault does not open with the keyring key: %v", err)
+	}
+	// A second init must leave the keyring key alone.
+	if err := InitVaultKeyring(vault.NewKey()); !errors.Is(err, ErrInitialized) {
+		t.Fatalf("second init: %v", err)
+	}
+	if k2, _ := vault.KeyringGet(); *k2 != *k1 {
+		t.Fatal("existing vault's keyring key was replaced")
+	}
+}
+
+func TestInitKeyringFailureRemovesVault(t *testing.T) {
+	keyring.MockInitWithError(errors.New("no keyring"))
+	t.Cleanup(keyring.MockInit)
+	setupEmpty(t)
+	if err := InitVaultKeyring(vault.NewKey()); err == nil {
+		t.Fatal("want keyring error")
+	}
+	if _, err := os.Stat(paths.Vault()); err == nil {
+		t.Fatal("vault left behind after keyring failure")
 	}
 }

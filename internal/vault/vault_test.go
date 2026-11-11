@@ -1,6 +1,8 @@
 package vault
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -40,5 +42,19 @@ func TestPassphrase(t *testing.T) {
 	}
 	if _, err := Open(p, DeriveKey([]byte("nope"), s)); err != ErrBadKey {
 		t.Fatalf("wrong passphrase: %v", err)
+	}
+}
+
+func TestCreateNeverReplaces(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "v.bin")
+	k := NewKey()
+	if err := Create(p, k, nil, &Data{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Create(p, NewKey(), nil, &Data{}); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("second create: %v", err)
+	}
+	if _, err := Open(p, k); err != nil {
+		t.Fatalf("original vault damaged: %v", err)
 	}
 }
