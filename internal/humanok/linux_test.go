@@ -5,6 +5,8 @@ package humanok
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -91,5 +93,20 @@ func TestConfirmCancelledIsDenied(t *testing.T) {
 	cancel()
 	if err := (platform{}).Confirm(ctx, "x"); !errors.Is(err, ErrDenied) || errors.Is(err, ErrUnavailable) {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestUntrustedPkcheckNeverRuns(t *testing.T) {
+	fake := filepath.Join(t.TempDir(), "pkcheck")
+	ran := fake + ".ran"
+	os.WriteFile(fake, []byte("#!/bin/sh\ntouch "+ran+"\nexit 0\n"), 0o755)
+	old := pkcheckPaths
+	pkcheckPaths = []string{fake}
+	defer func() { pkcheckPaths = old }()
+	if err := (platform{}).Confirm(context.Background(), "x"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("confirm: %v", err)
+	}
+	if _, err := os.Stat(ran); err == nil {
+		t.Fatal("untrusted pkcheck was run")
 	}
 }

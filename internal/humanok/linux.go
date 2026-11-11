@@ -24,8 +24,15 @@ const (
 	pkDismissed     = 3
 )
 
+// pkcheckPaths are the only places pkcheck is run from; never PATH.
+var pkcheckPaths = []string{"/usr/bin/pkcheck", "/bin/pkcheck"}
+
 var runPkcheck = func(ctx context.Context, args ...string) (int, string, error) {
-	out, err := exec.CommandContext(ctx, "pkcheck", args...).CombinedOutput()
+	pk, err := TrustedBinary(pkcheckPaths...)
+	if err != nil {
+		return -1, "", err
+	}
+	out, err := exec.CommandContext(ctx, pk, args...).CombinedOutput()
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
 		return ee.ExitCode(), string(out), nil
@@ -41,8 +48,8 @@ func (platform) Available() error {
 	if err != nil {
 		return fmt.Errorf("%w: polkit action not installed (run: sudo agentssh install-polkit)", ErrUnavailable)
 	}
-	if _, err := exec.LookPath("pkcheck"); err != nil {
-		return fmt.Errorf("%w: pkcheck not found (install polkit)", ErrUnavailable)
+	if _, err := TrustedBinary(pkcheckPaths...); err != nil {
+		return fmt.Errorf("%w: pkcheck: %v (install polkit)", ErrUnavailable, err)
 	}
 	name := ""
 	if u, err := user.Current(); err == nil {
