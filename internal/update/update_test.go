@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -239,7 +240,7 @@ func TestApply(t *testing.T) {
 			if !bytes.Equal(got, newBin) {
 				t.Errorf("exe=%q", got)
 			}
-			if st, _ := os.Stat(exe); st.Mode().Perm() != 0o755 {
+			if st, _ := os.Stat(exe); runtime.GOOS != "windows" && st.Mode().Perm() != 0o755 { // no unix modes on Windows
 				t.Errorf("mode=%v", st.Mode())
 			}
 			if m, _ := filepath.Glob(filepath.Join(dir, "*")); len(m) != 1 {
