@@ -179,9 +179,18 @@ jobs:
     needs: [build-linux-windows, build-macos, build-windows-installer]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with: { path: dist, pattern: "dist-*", merge-multiple: true }
       - run: cd dist && sha256sum * > SHA256SUMS && ls -l
+      - if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - if: startsWith(github.ref, 'refs/tags/v')
+        env: { OSTIARY_SIGNING_KEY: "${{ secrets.OSTIARY_SIGNING_KEY }}" }
+        run: |
+          go run ./tools/sign dist/SHA256SUMS
+          go run ./tools/sign -verify dist/SHA256SUMS   # checks with the embedded public key
       - uses: actions/upload-artifact@v4
         with: { name: ostiary, path: dist/ }
       - if: startsWith(github.ref, 'refs/tags/v')

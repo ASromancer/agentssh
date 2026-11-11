@@ -46,6 +46,18 @@ ostiary doctor
 
 Use one key per agent, not your personal key. Admin commands (`host`, `key`, `reload`, `approve`, `trust`) must run in a real terminal, and each one is confirmed in the OS authentication dialog, or with a code in code mode (see [Approvals](#approvals)).
 
+## Upgrading
+
+Ostiary checks GitHub for a newer release in the background and shows an "Update" banner in the web UI. Click it to upgrade, or run `ostiary upgrade` in a terminal; the upgrade is confirmed like any other admin action. The daemon then restarts itself.
+
+Before anything is installed, the signature over `SHA256SUMS` is verified against the public key built into Ostiary, and then the downloaded asset's SHA-256 is checked against that file. A mismatch aborts the upgrade and leaves the current version running.
+
+`.deb` installs are not replaced in place: the banner shows the command instead, which is `sudo apt install ./ostiary_<ver>_amd64.deb` with the new package.
+
+Set `OSTIARY_NO_UPDATE_CHECK=1` in the daemon's environment to turn off the background check.
+
+A vault in passphrase mode needs unlocking again after the restart.
+
 ## Moving from agentssh
 
 Ostiary is the new name of agentssh and starts from a clean slate; it does not read agentssh's data.

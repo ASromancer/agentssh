@@ -438,6 +438,39 @@ async function loadStatus() {
   $("pendingcount").textContent = n;
   document.title = (n ? "(" + n + ") " : "") + "Ostiary";
   $("configwarn").classList.toggle("hidden", !status.UserOnly);
+  renderUpdate(status.Update);
+}
+const RELEASE_PREFIX = "https://github.com/ASromancer/ostiary/";
+let upgradeWait = null;
+function renderUpdate(u) {
+  $("updatebanner").classList.toggle("hidden", !u);
+  const box = $("updatebody");
+  if (!u) { box.replaceChildren(); return; }
+  const key = u.Version + "|" + u.URL + "|" + (u.Manual || "");
+  if (box.dataset.key === key) return; // keep the button state across status polls
+  box.dataset.key = key;
+  const kids = [el("span", null, "Có bản Ostiary " + u.Version)];
+  if (u.URL && u.URL.startsWith(RELEASE_PREFIX)) {
+    const a = el("a", null, "Xem thay đổi");
+    a.href = u.URL; a.target = "_blank"; a.rel = "noopener noreferrer";
+    kids.push(a);
+  }
+  if (u.Manual) {
+    const cb = el("div", "cmdbox");
+    cb.append(el("pre", "cmd", u.Manual), copyBtn(u.Manual, "Sao chép lệnh"));
+    kids.push(cb);
+  } else {
+    const b = el("button", "btn primary", "Cập nhật");
+    b.type = "button";
+    b.addEventListener("click", () => busy(b, async () => {
+      const out = await admin("upgrade", u.Version);
+      if (out == null) return;
+      if (out) ok(out);
+      upgradeWait = waitLayer("Cập nhật Ostiary", "Ostiary đang khởi động lại…");
+    }));
+    kids.push(b);
+  }
+  box.replaceChildren(...kids);
 }
 async function toggleVault() {
   if (!status) return;
@@ -1404,7 +1437,7 @@ function conn(good) {
 const es = new EventSource("/events");
 let sseErrors = 0;
 let esOpened = false;
-es.onopen = () => { conn(true); if (esOpened) refresh(); esOpened = true; }; // resync what a drop missed
+es.onopen = () => { conn(true); if (upgradeWait) { upgradeWait.close(); upgradeWait = null; } if (esOpened) refresh(); esOpened = true; }; // resync what a drop missed
 es.addEventListener("update", () => { sseErrors = 0; conn(true); refresh(); });
 es.onerror = () => { conn(false); call("GET", "/api/status").catch(() => {}); /* a 401 here means the session is gone, not the daemon */ if (++sseErrors === 3 && !sessionDead) toast("Mất kết nối tới daemon ostiary", "error"); };
 // ---- setup ("Bắt đầu") ----

@@ -80,6 +80,10 @@ main { padding: 24px 28px 64px; width: 100%; max-width: 1180px; }
 @keyframes rise { from { opacity: 0; transform: translateY(4px); } }
 .banner { display: flex; gap: 12px; align-items: flex-start; margin: 16px 28px 0; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border)); border-radius: var(--r2); background: color-mix(in srgb, var(--danger) 9%, var(--s1)); color: var(--text); position: sticky; top: 53px; z-index: 4; }
 .banner .ic { color: var(--danger); margin-top: 3px; }
+.banner.info { border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); background: color-mix(in srgb, var(--accent) 9%, var(--s1)); }
+.banner.info .ic { color: var(--accent); }
+#updatebody { flex: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; min-width: 0; }
+#updatebody .cmdbox { flex-basis: 100%; }
 
 /* ---------- primitives ---------- */
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border: 1px solid var(--border-strong); border-radius: var(--r1); background: var(--s1); color: var(--text); font-size: var(--f13); font-weight: 500; cursor: pointer; white-space: nowrap; box-shadow: var(--sh1); transition: background .12s var(--ease), border-color .12s var(--ease), transform .12s var(--ease); }
