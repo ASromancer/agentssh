@@ -504,8 +504,13 @@ func (s *Service) Pending(_ *Empty, r *[]approval.Request) error {
 
 func (s *Service) Decide(a *DecideArgs, _ *Empty) error {
 	d := s.d
+	switch a.Choice {
+	case "y", "s", "n", "m":
+	default:
+		return fmt.Errorf("unknown choice %q", a.Choice)
+	}
 	switch {
-	case a.Choice == "n" || a.Choice == "m": // denying needs no proof
+	case a.Choice == "n": // denying needs no proof
 		_, err := d.q.Resolve(a.ID, a.Choice, a.Note, "none")
 		return err
 	case !d.osAuth():
@@ -516,9 +521,13 @@ func (s *Service) Decide(a *DecideArgs, _ *Empty) error {
 	if !ok {
 		return fmt.Errorf("no pending request #%d", a.ID)
 	}
-	msg := fmt.Sprintf("approve on %s: %s [%s]", req.Host, req.Cmd, req.Level)
-	if a.Choice == "s" {
-		msg += " (and the same command for 30 minutes)"
+	lvl := strings.ToUpper(fmt.Sprint(req.Level))
+	msg := fmt.Sprintf("[%s] approve on %s: %s", lvl, req.Host, req.Cmd)
+	switch a.Choice {
+	case "s":
+		msg += " \u2014 and the same command for 30 minutes"
+	case "m":
+		msg = fmt.Sprintf("[%s] deny on %s with a message to the agent: %s", lvl, req.Host, req.Cmd)
 	}
 	if err := d.confirm(msg); err != nil {
 		return err

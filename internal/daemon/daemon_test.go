@@ -18,7 +18,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
@@ -416,8 +415,18 @@ func TestOSAuth(t *testing.T) {
 	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Choice: "y"}, &Empty{}); err == nil {
 		t.Fatal("approved without OS authentication")
 	}
-	if msgs := fake.Msgs(); len(msgs) != 1 || !strings.Contains(msgs[0], "rm "+victim) || !strings.Contains(msgs[0], "destructive") {
+	if msgs := fake.Msgs(); len(msgs) != 1 || !strings.Contains(msgs[0], "rm "+victim) || !strings.Contains(msgs[0], "DESTRUCTIVE") {
 		t.Fatalf("dialog text %q", msgs)
+	}
+	// A deny-with-message reaches the agent, so it needs proof too.
+	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Choice: "m", Note: "x"}, &Empty{}); err == nil {
+		t.Fatal("message decision without OS authentication")
+	}
+	if p := h.d.q.Pending(); len(p) != 1 {
+		t.Fatalf("request not pending after refused m: %v", p)
+	}
+	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Choice: "q"}, &Empty{}); err == nil {
+		t.Fatal("unknown choice accepted")
 	}
 	fake.Allow = true
 	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Choice: "y"}, &Empty{}); err != nil {
@@ -430,9 +439,14 @@ func TestOSAuth(t *testing.T) {
 
 	// Denial needs no authentication.
 	before := len(fake.Msgs())
-	r = h.exec(ExecArgs{Cmd: "rm -rf /tmp/never"})
+	never := ExecArgs{Cmd: "rm -rf /tmp/never"}
+	r = h.exec(never)
 	if err := h.call("Decide", &DecideArgs{ID: r.Pending, Choice: "n"}, &Empty{}); err != nil || len(fake.Msgs()) != before {
 		t.Fatalf("deny: %v, dialogs %d", err, len(fake.Msgs())-before)
+	}
+	never.ApprovalID = r.Pending
+	if r := h.exec(never); r.Code != CodeDenied {
+		t.Fatalf("denied run: %+v", r)
 	}
 
 	// Admin without a code.
@@ -450,27 +464,47 @@ func TestOSAuth(t *testing.T) {
 	}
 
 	b, _ := os.ReadFile(paths.Audit())
-	if !bytes.Contains(b, []byte(`"auth":"os"`)) {
-		t.Fatalf("audit lacks auth=os:\n%s", b)
+	var runOS, denyNone bool
+	for _, l := range bytes.Split(b, []byte("\n")) {
+		runOS = runOS || bytes.Contains(l, []byte(`"kind":"run"`)) && bytes.Contains(l, []byte(`"auth":"os"`))
+		denyNone = denyNone || bytes.Contains(l, []byte(`rm -rf /tmp/never`)) && bytes.Contains(l, []byte(`"auth":"none"`))
+	}
+	if !runOS || !denyNone || !bytes.Contains(b, []byte(`"kind":"admin"`)) {
+		t.Fatalf("audit lacks run auth=os / deny auth=none:\n%s", b)
 	}
 }
 
 func TestDialogText(t *testing.T) {
-	long := strings.Repeat("é", 600) // 1200 bytes
+	const blank = "confirm an agentssh action"
+	pad := "[DESTRUCTIVE] approve on h: ls" + strings.Repeat(" ", 1500) + "; rm -rf ~"
+	got := dialogText(pad)
+	if got != "[DESTRUCTIVE] approve on h: ls ; rm -rf ~" {
+		t.Errorf("padding attack: %q", got)
+	}
+	long := "[DESTRUCTIVE] approve on h: " + strings.Repeat("x", 2000) + "; rm -rf ~"
+	got = dialogText(long)
+	if !strings.HasSuffix(got, "; rm -rf ~") || !strings.HasPrefix(got, "[DESTRUCTIVE]") || !strings.Contains(got, " bytes hidden ") || len(got) > 1000 {
+		t.Errorf("long: %q", got)
+	}
+	m := "a" + strings.Repeat("é", 600) // 1201 bytes
+	want := "a" + strings.Repeat("é", 249) + " … 302 bytes hidden … " + strings.Repeat("é", 200)
+	if got := dialogText(m); got != want {
+		t.Errorf("multibyte: %q", got)
+	}
 	for _, c := range []struct{ in, want string }{
 		{"hello", "hello"},
-		{"", "confirm an agentssh action"},
-		{" \t\n", "confirm an agentssh action"},
-		{"\x00\x00", "confirm an agentssh action"},
+		{"", blank},
+		{" \t\n\r", blank},
+		{"\x00\x00", blank},
 		{"a\x00b", "ab"},
 		{"a\xffb", "a\uFFFDb"},
+		{"a\nb\r\nc\td", "a b c d"},
+		{"ls\u202e txt.exe", "ls txt.exe"},
+		{"r\u200bm", "rm"},
+		{"a\u0085b\x1bc", "a b c"},
 	} {
 		if got := dialogText(c.in); got != c.want {
 			t.Errorf("dialogText(%q) = %q, want %q", c.in, got, c.want)
 		}
-	}
-	got := dialogText(long)
-	if !strings.HasSuffix(got, "…") || !utf8.ValidString(got) || len(got) > 1000+len("…") {
-		t.Errorf("long text: len %d valid %v", len(got), utf8.ValidString(got))
 	}
 }

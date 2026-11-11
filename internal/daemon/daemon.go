@@ -78,22 +78,39 @@ func (d *Daemon) osAuth() bool { return d.human.Available() == nil }
 const (
 	confirmTimeout = 2 * time.Minute
 	maxDialogBytes = 1000
+	dialogHead     = 500
+	dialogTail     = 400
 )
 
-// dialogText makes any message safe for every OS backend: valid UTF-8, no
-// NUL, never empty, bounded.
+// dialogText makes any message safe and honest for every OS backend: valid
+// UTF-8, no control or bidi/format characters, whitespace collapsed, never
+// empty. An over-long message keeps its head and tail so that padding
+// cannot hide the end of a command.
 func dialogText(msg string) string {
 	msg = strings.ToValidUTF8(msg, "\uFFFD")
-	msg = strings.ReplaceAll(msg, "\x00", "")
-	if strings.TrimSpace(msg) == "" {
+	msg = strings.Map(func(r rune) rune {
+		switch {
+		case r == 0, r >= 0x200B && r <= 0x200F, r >= 0x202A && r <= 0x202E,
+			r >= 0x2066 && r <= 0x2069, r == 0xFEFF:
+			return -1
+		case r < 0x20, r >= 0x7F && r <= 0x9F:
+			return ' '
+		}
+		return r
+	}, msg)
+	msg = strings.Join(strings.Fields(msg), " ")
+	if msg == "" {
 		return "confirm an agentssh action"
 	}
 	if len(msg) > maxDialogBytes {
-		cut := maxDialogBytes
-		for !utf8.RuneStart(msg[cut]) {
-			cut--
+		h, t := dialogHead, len(msg)-dialogTail
+		for !utf8.RuneStart(msg[h]) {
+			h--
 		}
-		msg = msg[:cut] + "…"
+		for !utf8.RuneStart(msg[t]) {
+			t++
+		}
+		msg = fmt.Sprintf("%s … %d bytes hidden … %s", msg[:h], t-h, msg[t:])
 	}
 	return msg
 }

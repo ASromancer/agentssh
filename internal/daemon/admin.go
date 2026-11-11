@@ -32,9 +32,13 @@ func (s *Service) Unlock(a *UnlockArgs, _ *Empty) error {
 		return err
 	}
 	var key *[32]byte
+	auth := "passphrase"
 	if salt == nil {
+		auth = "none"
 		if s.d.osAuth() {
+			auth = "os"
 			if err := s.d.confirm("unlock the agentssh vault"); err != nil {
+				s.d.log.Write(audit.Entry{Kind: "admin", Cmd: "unlock", Auth: auth, Decision: "denied", Note: err.Error()})
 				return err
 			}
 		}
@@ -45,7 +49,7 @@ func (s *Service) Unlock(a *UnlockArgs, _ *Empty) error {
 		key = vault.DeriveKey([]byte(a.Pass), salt)
 	}
 	err = s.d.unlock(key, salt)
-	s.d.log.Write(audit.Entry{Kind: "admin", Cmd: "unlock", Decision: map[bool]string{true: "allow", false: "denied"}[err == nil]})
+	s.d.log.Write(audit.Entry{Kind: "admin", Cmd: "unlock", Auth: auth, Decision: map[bool]string{true: "allow", false: "denied"}[err == nil]})
 	return err
 }
 
