@@ -28,7 +28,9 @@ func TestPolicyXML(t *testing.T) {
 			ID       string `xml:"id,attr"`
 			Message  string `xml:"message"`
 			Defaults struct {
-				Active string `xml:"allow_active"`
+				Any      string `xml:"allow_any"`
+				Inactive string `xml:"allow_inactive"`
+				Active   string `xml:"allow_active"`
 			} `xml:"defaults"`
 			Owner struct {
 				Key   string `xml:"key,attr"`
@@ -39,7 +41,8 @@ func TestPolicyXML(t *testing.T) {
 	if err := xml.Unmarshal([]byte(PolicyXML("alice")), &p); err != nil {
 		t.Fatal(err)
 	}
-	if p.Action.ID != ActionID || p.Action.Defaults.Active != "auth_self" || !strings.Contains(p.Action.Message, "$(message)") ||
+	if p.Action.ID != ActionID || p.Action.Defaults.Active != "auth_self" ||
+		p.Action.Defaults.Any != "auth_self" || p.Action.Defaults.Inactive != "auth_self" || !strings.Contains(p.Action.Message, "$(message)") ||
 		p.Action.Owner.Key != "org.freedesktop.policykit.owner" || p.Action.Owner.Value != "unix-user:alice" {
 		t.Fatalf("%+v", p.Action)
 	}

@@ -33,8 +33,9 @@ var Default Confirmer = platform{}
 
 // Fake is a Confirmer for tests.
 type Fake struct {
-	Err   error // returned by Available
-	Allow bool
+	Err        error // returned by Available
+	ConfirmErr error // if set, returned by Confirm
+	Allow      bool
 
 	mu   sync.Mutex
 	msgs []string
@@ -46,6 +47,9 @@ func (f *Fake) Confirm(_ context.Context, msg string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.msgs = append(f.msgs, msg)
+	if f.ConfirmErr != nil {
+		return f.ConfirmErr
+	}
 	if f.Allow {
 		return nil
 	}

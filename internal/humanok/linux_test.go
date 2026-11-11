@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -40,5 +41,38 @@ func TestConfirmArgs(t *testing.T) {
 		if !slices.Contains(args, want) {
 			t.Errorf("missing %q in %v", want, args)
 		}
+	}
+}
+
+func TestSetupProblem(t *testing.T) {
+	policy := []byte(PolicyXML("alice"))
+	files := map[string]bool{"/run/user/1000/wayland-0": true, "/tmp/.X11-unix/X0": true, "/abs/wl": true}
+	exists := func(p string) bool { return files[p] }
+	for _, tc := range []struct {
+		user string
+		env  map[string]string
+		ok   bool
+	}{
+		{"alice", map[string]string{"WAYLAND_DISPLAY": "wayland-0", "XDG_RUNTIME_DIR": "/run/user/1000"}, true},
+		{"alice", map[string]string{"WAYLAND_DISPLAY": "/abs/wl"}, true},
+		{"alice", map[string]string{"WAYLAND_DISPLAY": "wayland-1", "XDG_RUNTIME_DIR": "/run/user/1000", "DISPLAY": ":0"}, false},
+		{"alice", map[string]string{"DISPLAY": ":0"}, true},
+		{"alice", map[string]string{"DISPLAY": ":0.0"}, true},
+		{"alice", map[string]string{"DISPLAY": ":1"}, false},
+		{"alice", map[string]string{"DISPLAY": "localhost:10.0"}, false},
+		{"alice", map[string]string{"DISPLAY": ":0.x"}, false},
+		{"alice", map[string]string{}, false},
+		{"bob", map[string]string{"DISPLAY": ":0"}, false},
+		{"ali", map[string]string{"DISPLAY": ":0"}, false},
+		{"", map[string]string{"DISPLAY": ":0"}, false},
+	} {
+		err := setupProblem(policy, tc.user, func(k string) string { return tc.env[k] }, exists)
+		if (err == nil) != tc.ok || (err != nil && !errors.Is(err, ErrUnavailable)) {
+			t.Errorf("user %q env %v: got %v", tc.user, tc.env, err)
+		}
+	}
+	if err := setupProblem(policy, "bob", func(string) string { return ":0" }, exists); err == nil ||
+		!strings.Contains(err.Error(), "belongs to another user") {
+		t.Errorf("owner message: %v", err)
 	}
 }

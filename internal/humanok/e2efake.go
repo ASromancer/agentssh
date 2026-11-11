@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// Test-only confirmer: reads "allow" or "deny" from $AGENTSSH_E2E_HUMANOK
+// Test-only confirmer: reads "allow", "deny" or "unavailable" from $AGENTSSH_E2E_HUMANOK
 // and appends each dialog text to that file + ".log". Never in releases.
 type platform struct{}
 
@@ -28,8 +28,11 @@ func (platform) Confirm(_ context.Context, msg string) error {
 		f.Close()
 	}
 	b, _ := os.ReadFile(p)
-	if strings.TrimSpace(string(b)) == "allow" {
+	switch strings.TrimSpace(string(b)) {
+	case "allow":
 		return nil
+	case "unavailable":
+		return fmt.Errorf("%w: e2e fake dialog broke", ErrUnavailable)
 	}
 	return ErrDenied
 }
