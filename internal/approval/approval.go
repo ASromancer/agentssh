@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"math"
 	"math/big"
 	"os"
 	"os/exec"
@@ -290,15 +289,19 @@ func (q *Queue) Get(id int) (Request, bool) {
 // cannot guess and take the human's ticket. data is handed back by Check (e.g. the host key
 // whose fingerprint the human saw). code is returned only if the
 // notification failed.
+// maxJSInt is the largest integer a JavaScript number holds exactly; the
+// web UI round-trips ticket ids through JSON numbers.
+const maxJSInt = 1<<53 - 1
+
 func (q *Queue) Ticket(op, detail string, data any) (id int, code string) {
 	t := &ticket{op: op, code: NewCode(), data: data, expires: time.Now().Add(TicketValid)}
 	q.mu.Lock()
 	for id == 0 || q.tickets[id] != nil {
-		n, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt))
+		n, err := rand.Int(rand.Reader, big.NewInt(maxJSInt))
 		if err != nil {
 			panic(err)
 		}
-		id = int(n.Int64()) + 1 // 1..MaxInt
+		id = int(n.Int64()) + 1 // 1..2^53-1
 	}
 	q.tickets[id] = t
 	q.mu.Unlock()

@@ -231,6 +231,12 @@ func TestTicketIDsRandom(t *testing.T) {
 	if a <= 0 || b <= 0 || a == b || b == a+1 || a == b+1 {
 		t.Fatalf("ticket ids %d, %d: want random positive ids", a, b)
 	}
+	// the web UI parses ids as JS numbers: they must stay exact
+	for i := 0; i < 1000; i++ {
+		if id, _ := q.Ticket("reload", "", nil); id > maxJSInt {
+			t.Fatalf("ticket id %d exceeds 2^53-1", id)
+		}
+	}
 }
 
 func TestOSModeNotifyFailureHidesCode(t *testing.T) {
