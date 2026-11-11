@@ -48,6 +48,9 @@ func cmdDaemon(args []string) int {
 		}
 		return 0
 	}
+	if daemon.Running() {
+		return errf(1, "daemon already running on %s", paths.Socket())
+	}
 	if *logFile != "" {
 		os.MkdirAll(filepath.Dir(*logFile), 0o700)
 		f, err := os.OpenFile(*logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)

@@ -712,3 +712,33 @@ func TestReloadNeverDowngrades(t *testing.T) {
 		t.Fatalf("reload downgraded or hid the reason: %+v %q", st, ar.Out)
 	}
 }
+
+func TestRunning(t *testing.T) {
+	base := "/tmp" // short: unix socket paths are limited to ~104 bytes
+	if runtime.GOOS == "windows" {
+		base = ""
+	}
+	dir, _ := os.MkdirTemp(base, "agentssh-run")
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Setenv("AGENTSSH_SOCKET", filepath.Join(dir, "s"))
+	if Running() {
+		t.Fatal("running with no socket")
+	}
+	ln, err := net.Listen("unix", filepath.Join(dir, "s"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+	if !Running() {
+		t.Fatal("not running with a listener")
+	}
+}

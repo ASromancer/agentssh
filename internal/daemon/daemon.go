@@ -290,11 +290,19 @@ func cleanOut() {
 	}
 }
 
+// Running reports whether a daemon is accepting on the socket.
+func Running() bool {
+	c, err := net.DialTimeout("unix", paths.Socket(), time.Second)
+	if err == nil {
+		c.Close()
+	}
+	return err == nil
+}
+
 // Serve listens on the unix socket until SIGINT/SIGTERM.
 func (d *Daemon) Serve() error {
 	sock := paths.Socket()
-	if c, err := net.DialTimeout("unix", sock, time.Second); err == nil {
-		c.Close()
+	if Running() {
 		return errors.New("daemon already running on " + sock)
 	}
 	os.Remove(sock)
