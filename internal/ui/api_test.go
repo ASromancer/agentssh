@@ -125,6 +125,12 @@ func TestAPIAuditAndOutput(t *testing.T) {
 	if r.Total != 3 || len(r.Entries) != 1 || r.Entries[0].ID != 2 {
 		t.Fatalf("paging: %+v", r)
 	}
+	if w := api(t, s, "GET", "/api/audit?offset=-1", ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"total":3`) {
+		t.Fatalf("negative offset: %d %s", w.Code, w.Body.String())
+	}
+	if w := api(t, s, "GET", "/api/out/0", ""); w.Code != 400 {
+		t.Fatalf("id 0: %d", w.Code)
+	}
 	if w := api(t, s, "GET", "/api/out/3?grep=error", ""); !strings.Contains(w.Body.String(), `2: error y`) {
 		t.Fatalf("out: %s", w.Body.String())
 	}

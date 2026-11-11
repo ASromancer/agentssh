@@ -164,7 +164,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("GET /api/out/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.Atoi(r.PathValue("id"))
-		if err != nil {
+		if err != nil || id <= 0 {
 			fail(w, errors.New("bad id"))
 			return
 		}
@@ -242,11 +242,12 @@ func readAudit(path, host, decision, since string, limit, offset int) ([]audit.E
 		}
 		all = append(all, e)
 	}
+	if err := sc.Err(); err != nil {
+		return nil, 0, err
+	}
 	sort.SliceStable(all, func(i, j int) bool { return all[i].Time.After(all[j].Time) })
 	total := len(all)
-	if offset > total {
-		offset = total
-	}
+	offset = max(0, min(offset, total))
 	end := min(offset+limit, total)
 	page := all[offset:end]
 	if page == nil {
