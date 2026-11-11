@@ -76,7 +76,7 @@ jobs:
           ls -l dist
           deb=$(ls dist/ostiary_*_amd64.deb)
           dpkg-deb -c "$deb" | tee /dev/stderr | grep -e ' ./usr/bin/ostiary' -e 'ostiary.desktop' -e 'ostiary.service' | wc -l | grep -qx 3
-          dpkg-deb -I "$deb" | grep -F "Version: ${VERSION/-/~}"  # nfpm maps - to ~ (dev sorts before release)
+          dpkg-deb -I "$deb" | grep -F "Version: ${VERSION/-/\~}"  # nfpm maps - to ~ (dev sorts before release)
           sudo apt-get install -y "./$deb"
           ostiary version | grep -F "$VERSION"
       - name: release binaries contain no e2e test hooks
