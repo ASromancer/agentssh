@@ -110,3 +110,14 @@ func TestUntrustedPkcheckNeverRuns(t *testing.T) {
 		t.Fatal("untrusted pkcheck was run")
 	}
 }
+
+// The daemon's environment can be changed by a same-user agent
+// (systemctl --user set-environment), so pkcheck must not inherit it.
+func TestPkcheckEmptyEnv(t *testing.T) {
+	t.Setenv("LD_PRELOAD", "/tmp/evil.so")
+	t.Setenv("DBUS_SYSTEM_BUS_ADDRESS", "unix:path=/tmp/fake")
+	cmd := pkcheckCmd(context.Background(), "/usr/bin/pkcheck", "--version")
+	if cmd.Env == nil || len(cmd.Env) != 0 {
+		t.Fatalf("pkcheck env = %#v, want empty non-nil", cmd.Env)
+	}
+}

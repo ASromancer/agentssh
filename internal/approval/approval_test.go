@@ -243,3 +243,25 @@ func TestOSModeNotifyFailureHidesCode(t *testing.T) {
 		t.Fatalf("get exposes a code in OS mode: %+v", r)
 	}
 }
+
+func TestNotifyEnv(t *testing.T) {
+	env := []string{"LD_PRELOAD=/tmp/evil.so", "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1/bus",
+		"XDG_RUNTIME_DIR=/run/user/1", "DISPLAY=:0", "WAYLAND_DISPLAY=wayland-0", "HOME=/home/u",
+		"LANG=C.UTF-8", "LC_ALL=C", "PATH=/tmp/evil", "DBUS_SYSTEM_BUS_ADDRESS=x", "display=:9",
+		"SystemRoot=C:\\Windows", "TEMP=C:\\t", "AGENTSSH_TITLE=forged"}
+	got := strings.Join(notifyEnv(env, "linux"), " ")
+	if want := "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1/bus XDG_RUNTIME_DIR=/run/user/1 DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 HOME=/home/u LANG=C.UTF-8 LC_ALL=C"; got != want {
+		t.Errorf("linux:\n got %s\nwant %s", got, want)
+	}
+	got = strings.Join(notifyEnv(env, "windows"), " ")
+	for _, w := range []string{"SystemRoot=C:\\Windows", "TEMP=C:\\t", "display=:9", "HOME=/home/u"} {
+		if !strings.Contains(got, w) {
+			t.Errorf("windows: missing %s in %s", w, got)
+		}
+	}
+	for _, bad := range []string{"LD_PRELOAD", "PATH=", "DBUS_SYSTEM", "AGENTSSH_TITLE"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("windows: %s leaked into %s", bad, got)
+		}
+	}
+}

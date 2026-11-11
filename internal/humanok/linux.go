@@ -32,7 +32,7 @@ var runPkcheck = func(ctx context.Context, args ...string) (int, string, error) 
 	if err != nil {
 		return -1, "", err
 	}
-	out, err := exec.CommandContext(ctx, pk, args...).CombinedOutput()
+	out, err := pkcheckCmd(ctx, pk, args...).CombinedOutput()
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
 		return ee.ExitCode(), string(out), nil
@@ -41,6 +41,16 @@ var runPkcheck = func(ctx context.Context, args ...string) (int, string, error) 
 		return -1, string(out), err
 	}
 	return 0, string(out), nil
+}
+
+// pkcheckCmd runs pkcheck with an empty environment. The daemon's
+// environment is not trusted (an agent can change it with systemctl --user
+// set-environment and restart the daemon): LD_PRELOAD or
+// DBUS_SYSTEM_BUS_ADDRESS would decide the answer. pkcheck needs none of it.
+func pkcheckCmd(ctx context.Context, pk string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, pk, args...)
+	cmd.Env = []string{} // non-nil: nil would inherit
+	return cmd
 }
 
 func (platform) Available() error {

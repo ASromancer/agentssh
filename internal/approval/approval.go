@@ -364,13 +364,34 @@ func Desktop(title, body string) error {
 	case "windows":
 		// Title and body go through the environment, never into the script.
 		cmd = exec.Command(bin, "-NoProfile", "-NonInteractive", "-Command", windowsToast)
-		cmd.Env = append(os.Environ(), "AGENTSSH_TITLE="+title, "AGENTSSH_BODY="+body)
 	}
+	cmd.Env = append(notifyEnv(os.Environ(), runtime.GOOS), "AGENTSSH_TITLE="+title, "AGENTSSH_BODY="+body)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// notifyEnv keeps only the variables a notifier needs. The daemon's
+// environment is not trusted (an agent can change it and restart the
+// daemon), so LD_PRELOAD, PATH and the like never reach the helper.
+func notifyEnv(environ []string, goos string) []string {
+	keep := []string{"DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "DISPLAY", "WAYLAND_DISPLAY", "HOME", "LANG", "LC_ALL"}
+	if goos == "windows" {
+		keep = append(keep, "SystemRoot", "USERPROFILE", "TEMP", "TMP", "LOCALAPPDATA", "APPDATA")
+	}
+	var out []string
+	for _, kv := range environ {
+		k, _, _ := strings.Cut(kv, "=")
+		for _, w := range keep {
+			if k == w || (goos == "windows" && strings.EqualFold(k, w)) {
+				out = append(out, kv)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // windowsToast shows a toast as Windows PowerShell's own app id, which is
