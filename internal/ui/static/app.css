@@ -291,6 +291,8 @@ td.nowrap { white-space: nowrap; color: var(--text2); }
   .side-foot .ver { display: none; }
   .topbar { top: 49px; padding: 10px 16px; flex-wrap: wrap; }
   .topbar h1 { font-size: var(--f16); }
+  .btn, .input, .select, .chip, .iconbtn, .nav button { min-height: 40px; }
+  .iconbtn, .copybtn { min-width: 40px; min-height: 40px; }
   main { padding: 16px 16px 48px; }
   .banner { margin: 12px 16px 0; top: 100px; }
   .stickybar { top: 100px; }

@@ -107,7 +107,12 @@ async function busy(button, fn) {
 function copyText(text, btn) {
   const done = () => {
     ok("Đã copy");
-    if (btn) { const old = btn.firstChild; btn.replaceChildren(icon("check")); setTimeout(() => btn.replaceChildren(old), 1400); }
+    if (btn) {
+      clearTimeout(btn._t);
+      if (!btn._old) btn._old = btn.firstChild;
+      btn.replaceChildren(icon("check"));
+      btn._t = setTimeout(() => btn.replaceChildren(btn._old), 1400);
+    }
   };
   if (!navigator.clipboard) { fail(new Error("Trình duyệt không cho copy")); return; }
   navigator.clipboard.writeText(text).then(done, () => fail(new Error("Không copy được")));
@@ -158,7 +163,8 @@ function openLayer(kind, title) {
   };
   layer.title = (t) => { h.textContent = t; };
   x.addEventListener("click", layer.close);
-  back.addEventListener("mousedown", (e) => { if (e.target === back) layer.close(); });
+  // layer.dirty (optional): unsaved input, so backdrop click and Esc must not discard it
+  back.addEventListener("mousedown", (e) => { if (e.target === back && !(layer.dirty && layer.dirty())) layer.close(); });
   document.body.appendChild(back);
   layers.push(layer);
   layer.focusFirst = () => {
@@ -170,7 +176,7 @@ function openLayer(kind, title) {
 document.addEventListener("keydown", (e) => {
   const top = layers[layers.length - 1];
   if (!top) return;
-  if (e.key === "Escape") { e.preventDefault(); top.close(); return; }
+  if (e.key === "Escape") { e.preventDefault(); if (!(top.dirty && top.dirty())) top.close(); return; }
   if (e.key !== "Tab") return;
   const items = Array.from(top.box.querySelectorAll(FOCUSABLE)).filter((n) => n.offsetParent !== null);
   if (!items.length) { e.preventDefault(); return; }
@@ -399,12 +405,14 @@ function metaChip(k, v) {
   return s;
 }
 
+const authCode = () => !!status && status.Auth !== "os";
 function buildCard(r) {
   const c = el("article", "card req " + (r.level || ""));
   c.dataset.id = r.id;
   c.id = "req-" + r.id;
-  const code = status && status.Auth !== "os";
+  const code = authCode();
   const os = !code;
+  c._code = code;
   if (hasTime(r.expires)) {
     const cd = el("div", "countdown");
     cd.setAttribute("role", "progressbar");
@@ -533,6 +541,7 @@ function tickCards() {
 setInterval(tickCards, 1000);
 
 async function loadPending() {
+  if (!status) await loadStatus(); // cards depend on the auth mode
   const list = await call("GET", "/api/pending");
   const box = $("reqlist");
   $("noreq").classList.toggle("hidden", list.length > 0);
@@ -542,6 +551,7 @@ async function loadPending() {
   const focus = Number((location.hash.match(/req=(\d+)/) || [])[1]);
   list.slice().sort((a, b) => b.id - a.id).forEach((r, i) => { // newest first
     let c = have.get(r.id);
+    if (c && c._code !== authCode()) { c.remove(); c = null; } // auth mode changed
     if (!c) c = buildCard(r);
     c.classList.toggle("focus", r.id === focus);
     if (box.children[i] !== c) box.insertBefore(c, box.children[i] || null);
@@ -612,7 +622,7 @@ function menu(anchor, items) { // items: [label, icon, fn, danger] or null for a
     b.type = "button";
     b.setAttribute("role", "menuitem");
     b.append(icon(it[1]), document.createTextNode(it[0]));
-    b.addEventListener("click", () => { close(); it[2](); });
+    b.addEventListener("click", () => { close(); anchor.focus(); it[2](); });
     m.appendChild(b);
   });
   anchor.parentNode.appendChild(m);
@@ -624,15 +634,15 @@ function menu(anchor, items) { // items: [label, icon, fn, danger] or null for a
 function hostCard(name, h) {
   const trusted = !!hostData.Trusted[name];
   const c = el("div", "card hostcard" + (h.agent ? "" : " dim"));
-  c.tabIndex = 0;
-  c.setAttribute("role", "button");
-  c.setAttribute("aria-label", "Sửa host " + name);
   const top = el("div", "top");
   const av = el("div", "avatar", initials(name));
   av.style.setProperty("--h", String(hashHue(name)));
   const main = el("div", "main");
   main.append(el("div", "name", name), el("div", "sub", addrOf(h)));
   main.title = h.description || "";
+  main.tabIndex = 0;
+  main.setAttribute("role", "button");
+  main.setAttribute("aria-label", "Sửa host " + name);
   const mw = el("div", "menuwrap");
   const kb = el("button", "iconbtn");
   kb.type = "button";
@@ -664,7 +674,7 @@ function hostCard(name, h) {
   c.append(top, tags);
   const open = () => openHostDrawer(name, h).catch(fail);
   c.addEventListener("click", open);
-  c.addEventListener("keydown", (e) => { if ((e.key === "Enter" || e.key === " ") && e.target === c) { e.preventDefault(); open(); } });
+  c.addEventListener("keydown", (e) => { if ((e.key === "Enter" || e.key === " ") && e.target === main) { e.preventDefault(); open(); } });
   return c;
 }
 async function trustHost(name) {
@@ -739,7 +749,8 @@ function chipInput(initial, placeholder, label) {
 }
 
 async function openHostDrawer(name, h) {
-  const keys = await call("GET", "/api/keys").catch(() => []);
+  let locked = false;
+  const keys = await call("GET", "/api/keys").catch(() => { locked = !!(status && status.Locked); return []; });
   const layer = openLayer("drawer", name ? "Sửa host " + name : "Thêm host");
   const form = el("form");
   form.noValidate = true;
@@ -754,7 +765,7 @@ async function openHostDrawer(name, h) {
   const sel = el("select", "select");
   sel.appendChild(el("option", null, "(không dùng key)")).value = "";
   keys.forEach((k) => { const n = k.split("\t")[0]; const o = el("option", null, n); o.value = n; sel.appendChild(o); });
-  if (h && h.key && !keys.some((k) => k.split("\t")[0] === h.key)) { const o = el("option", null, h.key + " (không tìm thấy)"); o.value = h.key; sel.appendChild(o); }
+  if (h && h.key && !keys.some((k) => k.split("\t")[0] === h.key)) { const o = el("option", null, h.key + (locked ? " (vault đang khóa)" : " (không tìm thấy)")); o.value = h.key; sel.appendChild(o); }
   sel.value = h ? h.key || "" : "";
   const iDesc = mkInput("text", h ? h.description : "", "Máy này dùng để làm gì");
   const fName = field("Tên", iName, name ? "Tên không đổi được sau khi tạo." : "Agent gọi host bằng tên này.");
@@ -794,6 +805,10 @@ async function openHostDrawer(name, h) {
 
   form.append(fName, row, fUser, fKey, fProf, fAgent, fDesc, fAllow, fDeny);
   layer.body.appendChild(form);
+  let dirty = false;
+  ["input", "change"].forEach((t) => form.addEventListener(t, () => { dirty = true; }));
+  form.addEventListener("click", (e) => { if (e.target.closest(".chips button")) dirty = true; });
+  layer.dirty = () => dirty;
   iName.setAttribute("data-autofocus", "");
   if (name) iHost.setAttribute("data-autofocus", "");
 
@@ -1131,12 +1146,13 @@ function conn(good) {
 }
 const es = new EventSource("/events");
 let sseErrors = 0;
-es.onopen = () => conn(true);
+let esOpened = false;
+es.onopen = () => { conn(true); if (esOpened) refresh(); esOpened = true; }; // resync what a drop missed
 es.addEventListener("update", () => { sseErrors = 0; conn(true); refresh(); });
 es.onerror = () => { conn(false); if (++sseErrors === 3) toast("Mất kết nối tới daemon agentssh", "error"); };
 function route() { // #req=N focuses a request; #hosts, #keychain... deep-link a view
   const h = location.hash.slice(1);
-  showView(VIEWS[h] ? h : "approvals");
+  showView(Object.hasOwn(VIEWS, h) ? h : "approvals");
   if (h.startsWith("req=")) loadPending().catch(fail);
 }
 window.addEventListener("hashchange", route);

@@ -333,6 +333,8 @@ type knownHost struct {
 	Name        string `json:"name,omitempty"` // matching agentssh host, if any
 }
 
+const maxKnownHosts = 10000
+
 // readKnownHosts lists known_hosts entries (public data). Unparseable lines
 // and revoked/CA markers are skipped; a missing file gives an empty list.
 func readKnownHosts(path string, names map[string]string) []knownHost {
@@ -343,7 +345,7 @@ func readKnownHosts(path string, names map[string]string) []knownHost {
 	}
 	defer f.Close()
 	br := bufio.NewReader(f)
-	for {
+	for len(out) < maxKnownHosts {
 		line, err := readLine(br, 64<<10)
 		if len(line) > 0 {
 			if marker, hs, key, _, _, perr := ssh.ParseKnownHosts(line); perr == nil && marker == "" {

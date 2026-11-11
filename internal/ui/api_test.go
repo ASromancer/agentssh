@@ -224,3 +224,20 @@ func TestKnownHosts(t *testing.T) {
 		t.Errorf("missing file: %s", got)
 	}
 }
+
+func TestReadKnownHostsLimits(t *testing.T) {
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	k, _ := ssh.NewPublicKey(pub)
+	good := knownhosts.Line([]string{"10.0.0.5"}, k) + "\n"
+	f := filepath.Join(t.TempDir(), "known_hosts")
+	// an oversized line is skipped, entries around it survive
+	os.WriteFile(f, []byte(good+strings.Repeat("x", 200<<10)+"\n"+good), 0o600)
+	if got := readKnownHosts(f, nil); len(got) != 2 {
+		t.Fatalf("oversized line: got %d entries", len(got))
+	}
+	// entry count is capped
+	os.WriteFile(f, []byte(strings.Repeat(good, maxKnownHosts+50)), 0o600)
+	if got := readKnownHosts(f, nil); len(got) != maxKnownHosts {
+		t.Fatalf("cap: got %d entries", len(got))
+	}
+}
