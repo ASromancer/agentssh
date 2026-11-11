@@ -65,6 +65,7 @@ func installService(startNow bool) error {
 		if err := writeFile(p, systemdUnit(exe)); err != nil {
 			return err
 		}
+		installDesktopUser(home, exe)
 		if out, err := exec.Command("systemctl", "--user", "daemon-reload").CombinedOutput(); err != nil {
 			return fmt.Errorf("%v: %s", err, out)
 		}
