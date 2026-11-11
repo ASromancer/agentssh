@@ -797,8 +797,14 @@ func cmdUninstallService(args []string) int {
 // cmdInstallService re-runs the service install on an initialized setup, so
 // an upgrade can pick up a changed unit.
 func cmdInstallService(args []string) int {
-	if t, code := openTTY("install-service"); t == nil {
-		return code
+	yes := len(args) == 1 && args[0] == "--yes"
+	if yes && runtime.GOOS != "windows" {
+		return errf(2, "--yes is only for the Windows installer")
+	}
+	if !yes {
+		if t, code := openTTY("install-service"); t == nil {
+			return code
+		}
 	}
 	if err := installService(true); err != nil {
 		return errf(1, "%v", err)

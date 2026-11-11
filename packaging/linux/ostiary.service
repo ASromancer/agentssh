@@ -1,0 +1,11 @@
+[Unit]
+Description=ostiary daemon
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/ostiary daemon
+Restart=on-failure
+
+[Install]
+WantedBy=graphical-session.target

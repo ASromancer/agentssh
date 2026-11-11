@@ -1,0 +1,44 @@
+name: ostiary
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: utils
+priority: optional
+maintainer: ASromancer <65549952+ASromancer@users.noreply.github.com>
+description: |
+  The doorkeeper between AI agents and your servers: AI coding agents run
+  SSH commands through Ostiary without ever seeing private keys.
+homepage: https://github.com/ASromancer/ostiary
+license: Apache-2.0
+contents:
+  - src: build/linux-${ARCH}/ostiary
+    dst: /usr/bin/ostiary
+    expand: true
+    file_info: { mode: 0755 }
+  - src: packaging/linux/ostiary.desktop
+    dst: /usr/share/applications/ostiary.desktop
+    file_info: { mode: 0644 }
+  - src: packaging/linux/ostiary.service
+    dst: /usr/lib/systemd/user/ostiary.service
+    file_info: { mode: 0644 }
+  - src: build/icons/16.png
+    dst: /usr/share/icons/hicolor/16x16/apps/ostiary.png
+    file_info: { mode: 0644 }
+  - src: build/icons/32.png
+    dst: /usr/share/icons/hicolor/32x32/apps/ostiary.png
+    file_info: { mode: 0644 }
+  - src: build/icons/48.png
+    dst: /usr/share/icons/hicolor/48x48/apps/ostiary.png
+    file_info: { mode: 0644 }
+  - src: build/icons/64.png
+    dst: /usr/share/icons/hicolor/64x64/apps/ostiary.png
+    file_info: { mode: 0644 }
+  - src: build/icons/128.png
+    dst: /usr/share/icons/hicolor/128x128/apps/ostiary.png
+    file_info: { mode: 0644 }
+  - src: build/icons/256.png
+    dst: /usr/share/icons/hicolor/256x256/apps/ostiary.png
+    file_info: { mode: 0644 }
+  - src: build/icons/512.png
+    dst: /usr/share/icons/hicolor/512x512/apps/ostiary.png
+    file_info: { mode: 0644 }
