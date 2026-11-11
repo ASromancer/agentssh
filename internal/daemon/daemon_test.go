@@ -258,6 +258,16 @@ func TestDaemonEndToEnd(t *testing.T) {
 	if len(hr.Hosts) != 1 || hr.Hosts[0].Name != "web1" || hr.Hosts[0].Profile != "standard" {
 		t.Fatalf("hosts: %+v", hr)
 	}
+	var hl HostListReply
+	if err := h.call("HostList", &Empty{}, &hl); err != nil {
+		t.Fatal(err)
+	}
+	if len(hl.Hosts) != 2 || hl.Hosts["hidden"].Agent || !hl.Hosts["web1"].Agent || !hl.Trusted["web1"] || hl.Trusted["hidden"] {
+		t.Fatalf("host list: %+v", hl)
+	}
+	if h.d.Service() == nil {
+		t.Fatal("Service accessor")
+	}
 
 	r := h.exec(ExecArgs{Cmd: "echo hello"})
 	if r.Code != 0 || r.Exit != 0 || r.Output != "hello\n" || r.Level != "read" {

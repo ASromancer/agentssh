@@ -369,3 +369,6 @@ func checkPeer(c net.Conn) error {
 // SetNotifyLink makes approval notifications open f(id) when clicked.
 // Call it before Serve.
 func (d *Daemon) SetNotifyLink(f func(id int) string) { d.q.Link = f }
+
+// Service returns the daemon's RPC service, for in-process callers (the UI).
+func (d *Daemon) Service() *Service { return &Service{d} }

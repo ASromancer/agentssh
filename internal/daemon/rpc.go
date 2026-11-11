@@ -130,3 +130,10 @@ func Dial() (*rpc.Client, error) {
 	}
 	return jsonrpc.NewClient(c), nil
 }
+
+// HostListReply is every configured host (not only those visible to
+// agents), for the human UI.
+type HostListReply struct {
+	Hosts   map[string]hosts.Host
+	Trusted map[string]bool // host key pinned in known_hosts
+}

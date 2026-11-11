@@ -541,3 +541,13 @@ func (s *Service) Lock(_ *Empty, _ *Empty) error {
 	s.d.log.Write(audit.Entry{Kind: "admin", Cmd: "lock", Decision: "allow"})
 	return nil
 }
+
+func (s *Service) HostList(_ *Empty, r *HostListReply) error {
+	cfg, _, _, _ := s.d.snapshot()
+	r.Hosts, r.Trusted = map[string]hosts.Host{}, map[string]bool{}
+	for name, h := range cfg.Hosts {
+		r.Hosts[name] = *h
+		r.Trusted[name] = sshconn.Known(paths.KnownHosts(), h.Addr())
+	}
+	return nil
+}
